@@ -70,31 +70,47 @@ def draw_ground():
     glEnable(GL_LIGHTING)  # Re-enable lighting
 
 def draw_weapon_model(quaternion_weapon, weapon_system=None):
-    """Draw the pistol model using quaternion-based positioning"""
+    """Draw the pistol model using quaternion-based positioning with reload transitions"""
+    
+    # Get the appropriate weapon quaternion (cursor-following or reload transition)
+    if weapon_system:
+        weapon_quaternion = weapon_system.get_weapon_orientation_quaternion(quaternion_weapon)
+    else:
+        weapon_quaternion = quaternion_weapon.quaternion
+    
+    # Temporarily override the quaternion_weapon's quaternion for rendering
+    original_quaternion = quaternion_weapon.quaternion.copy()
+    quaternion_weapon.quaternion = weapon_quaternion
+    
     # Apply weapon transformation (this pushes matrix)
     if quaternion_weapon.apply_weapon_transform():
         
         # Reduced scale for smaller weapon size
         weapon_scale = 50.0  # Reduced from 100.0
         
-        # Calculate reload spin animation - Y-axis rotation (720 degrees)
-        reload_rotation = 0
-        if weapon_system and weapon_system.is_reloading:
-            # Get reload progress (0.0 to 1.0)
-            progress = weapon_system.get_reload_progress()
-            # Spin 720 degrees (2 full rotations) during reload on Y-axis
-            reload_rotation = progress * 720.0
-        
         # Render the pistol model at origin (transformation already applied)
-        # Add reload spin to the yaw rotation (Y-axis)
+        # Weapon stays steady during reload - no spinning
         render_pistol(
             position=(0, 0, 0),  # Centered at origin since transform is already applied
-            rotation=(-90 - reload_rotation, 0, 90),  # Y-axis spin during reload
+            rotation=(-90, 0, 90),  # Fixed rotation - no spinning
             scale=weapon_scale
         )
         
         # Pop the matrix
         glPopMatrix()
+    
+    # Restore original quaternion
+    quaternion_weapon.quaternion = original_quaternion
+    
+    # Render reload animation arm if weapon system is provided
+    if weapon_system:
+        # Get weapon world position for arm animation
+        weapon_world_pos = [
+            quaternion_weapon.camera_pos[0] + quaternion_weapon.weapon_offset[0],
+            quaternion_weapon.camera_pos[1] + quaternion_weapon.weapon_offset[1],
+            quaternion_weapon.camera_pos[2] + quaternion_weapon.weapon_offset[2]
+        ]
+        weapon_system.render_reload_animation(weapon_world_pos)
 
 def draw_cursor_target(quaternion_weapon):
     """Draw a small sphere at the cursor target position for visualization"""

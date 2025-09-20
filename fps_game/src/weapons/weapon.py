@@ -3,6 +3,9 @@ def shoot(camera, enemies, weapon_system, quaternion_weapon=None):
     
     # Check if weapon can shoot
     if not weapon_system.shoot():
+        # If shooting failed and we're out of ammo, trigger reload with current weapon orientation
+        if weapon_system.current_ammo <= 0 and quaternion_weapon is not None:
+            weapon_system.start_reload(quaternion_weapon.quaternion)
         return False
     
     if quaternion_weapon is None:

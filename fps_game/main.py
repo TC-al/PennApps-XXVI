@@ -77,8 +77,8 @@ class Game:
         print("Watch out - they're coming for you!")
         print("Health: 100/100 - Don't let enemies touch you!")
         print(f"Ammo: {self.weapon_system.max_ammo} rounds per magazine")
-        print("The weapon now follows your cursor and shoots from the gun tip!")
-        print("The weapon spins during reload animation!")
+        print("NEW: The weapon smoothly transitions to center during reload!")
+        print("Watch the beige arm perform the reload animation!")
     
     def handle_events(self):
         """Handle pygame events"""
@@ -89,9 +89,9 @@ class Game:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
                 elif event.key == pygame.K_r:
-                    # Manual reload
-                    if self.weapon_system.force_reload():
-                        print("Manual reload started! Watch the weapon spin!")
+                    # Manual reload with weapon transition
+                    if self.weapon_system.force_reload(self.quaternion_weapon.quaternion):
+                        print("Manual reload started! Watch the weapon transition and arm animation!")
                     else:
                         print("Cannot reload now (already full or already reloading)")
             elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -116,8 +116,9 @@ class Game:
         # Update weapon system
         self.weapon_system.update()
         
-        # Update quaternion weapon to track cursor
-        self.quaternion_weapon.update()
+        # Update quaternion weapon to track cursor (but only when not transitioning during reload)
+        if not self.weapon_system.is_reloading:
+            self.quaternion_weapon.update()
             
         # Get player position for collision detection (camera position since camera is fixed)
         player_pos = [self.camera.x, self.camera.y, self.camera.z]
@@ -163,7 +164,7 @@ class Game:
         # Draw cursor target for visualization (optional - can be removed)
         draw_cursor_target(self.quaternion_weapon)
         
-        # Draw weapon using cursor tracking - NOW PASSES WEAPON SYSTEM FOR RELOAD ANIMATION
+        # Draw weapon using cursor tracking with reload transitions
         draw_weapon_model(self.quaternion_weapon, self.weapon_system)
         
         # Draw enemies
