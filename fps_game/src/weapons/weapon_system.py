@@ -38,12 +38,14 @@ class WeaponSystem:
         return True
     
     def start_reload(self, current_quaternion=None):
-        """Start the reload process with weapon transition"""
+        """Start the reload process with weapon transition - NO sound here"""
         if self.is_reloading or self.current_ammo == self.max_ammo:
             return False
             
         self.is_reloading = True
         self.reload_start_time = time.time()
+        
+        # NO SOUND CALL HERE - sound will be triggered during pull_back phase
         
         # Start the reload animation with current weapon quaternion
         if current_quaternion is not None:
@@ -53,12 +55,12 @@ class WeaponSystem:
             import numpy as np
             self.reload_animation.start_animation(np.array([1.0, 0.0, 0.0, 0.0]))
         
-        print(f"Reloading... ({self.reload_time:.1f}s)")
+        print(f"Reloading... ({self.reload_time:.1f}s) - Sound will play during slide pull!")
         return True
     
     def update(self):
         """Update weapon state (call every frame)"""
-        # Update reload animation
+        # Update reload animation (this handles sound timing internally)
         self.reload_animation.update()
         
         if self.is_reloading:

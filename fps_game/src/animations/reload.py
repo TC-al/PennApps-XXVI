@@ -2,6 +2,7 @@ import time
 import math
 import numpy as np
 from OpenGL.GL import *
+from src.audio.sound_system import play_reload_sound
 
 class ReloadAnimation:
     """Handles the reload animation using inverse kinematics with two-segment arm"""
@@ -14,6 +15,14 @@ class ReloadAnimation:
         # Store original weapon orientation for smooth transition back
         self.original_quaternion = None
         self.target_quaternion = None  # Forward-facing quaternion during reload
+        
+        # Smooth gun transition settings
+        self.gun_transition_start = None  # Gun position at start of reload
+        self.gun_transition_target = None  # Target gun position during reload
+        self.gun_smooth_factor = 0.08  # How smooth the gun movement is (lower = smoother)
+        
+        # Sound effect timing
+        self.sound_played = False  # Track if reload sound has been played
         
         # Arm segment lengths - increased for better reach
         self.upper_arm_length = 1.5  # Shoulder to elbow (increased)
@@ -40,7 +49,7 @@ class ReloadAnimation:
             'transition_to_center': 0.15,   # 15% - Gun moves to center position
             'reach_in': 0.20,              # 20% - Arm reaches toward gun
             'contact': 0.10,               # 10% - Hand makes contact with slide
-            'pull_back': 0.15,             # 15% - Pull slide back
+            'pull_back': 0.15,             # 15% - Pull slide back (SOUND PLAYS HERE)
             'release': 0.10,               # 10% - Release slide forward
             'retract': 0.15,               # 15% - Arm retracts
             'transition_to_cursor': 0.15    # 15% - Gun returns to cursor position
@@ -60,21 +69,38 @@ class ReloadAnimation:
         """Start the reload animation with current weapon quaternion"""
         self.is_active = True
         self.start_time = time.time()
+        self.sound_played = False  # Reset sound flag
         
         # Store current quaternion for smooth transition back
         self.original_quaternion = current_quaternion.copy()
         
         # Create forward-facing target quaternion (no rotation from default)
         self.target_quaternion = np.array([1.0, 0.0, 0.0, 0.0])  # Identity quaternion
+        
+        # Set up smooth gun transition
+        self.gun_transition_start = current_quaternion.copy()
+        self.gun_transition_target = self.target_quaternion.copy()
     
     def update(self):
-        """Update animation state"""
+        """Update animation state and handle sound timing"""
         if not self.is_active:
             return
             
         elapsed = time.time() - self.start_time
         if elapsed >= self.duration:
             self.is_active = False
+            self.sound_played = False  # Reset for next reload
+            return
+        
+        # Check if we should play the reload sound during pull_back phase
+        current_phase = self.get_current_phase()
+        if current_phase == 'pull_back' and not self.sound_played:
+            # Play sound at the start of pull_back phase
+            phase_progress = self.get_phase_progress('pull_back')
+            if phase_progress >= 0.1:  # Play sound 10% into the pull_back phase
+                play_reload_sound()
+                self.sound_played = True
+                print("Reload sound triggered during slide pull!")
     
     def get_progress(self):
         """Get overall animation progress (0.0 to 1.0)"""
@@ -118,20 +144,41 @@ class ReloadAnimation:
             
         overall_progress = self.get_progress()
         
-        # During transition_to_center phase
+        # During transition_to_center phase - smooth transition to center
         if overall_progress <= self.phase_times['transition_to_center']['end']:
             phase_progress = self.get_phase_progress('transition_to_center')
-            eased_progress = self._ease_in_out(phase_progress)
+            eased_progress = self._ease_in_out_cubic(phase_progress)
             return self._slerp_quaternions(self.original_quaternion, self.target_quaternion, eased_progress)
         
-        # During main animation phases (gun stays in center)
+        # During main animation phases (gun stays in center with slight movement)
         elif overall_progress <= self.phase_times['retract']['end']:
-            return self.target_quaternion
+            # Add subtle gun movement during arm animation for realism
+            current_phase = self.get_current_phase()
+            phase_progress = self.get_phase_progress(current_phase)
+            
+            # Small movements during different phases
+            movement_offset = np.array([0.0, 0.0, 0.0, 0.0])  # Base quaternion offset
+            
+            if current_phase == 'contact':
+                # Slight forward tilt when hand contacts
+                tilt_amount = phase_progress * 0.05
+                movement_offset = self._create_rotation_quaternion([1, 0, 0], tilt_amount)
+            elif current_phase == 'pull_back':
+                # Slight backward tilt when pulling slide
+                tilt_amount = phase_progress * 0.08
+                movement_offset = self._create_rotation_quaternion([1, 0, 0], -tilt_amount)
+            elif current_phase == 'release':
+                # Slight forward snap when releasing
+                snap_amount = (1.0 - phase_progress) * 0.06
+                movement_offset = self._create_rotation_quaternion([1, 0, 0], snap_amount)
+            
+            # Combine target quaternion with movement
+            return self._combine_quaternions(self.target_quaternion, movement_offset)
         
-        # During transition_to_cursor phase
+        # During transition_to_cursor phase - smooth transition back to original
         else:
             phase_progress = self.get_phase_progress('transition_to_cursor')
-            eased_progress = self._ease_in_out(phase_progress)
+            eased_progress = self._ease_in_out_cubic(phase_progress)
             return self._slerp_quaternions(self.target_quaternion, self.original_quaternion, eased_progress)
     
     def get_target_hand_position(self, weapon_position):
@@ -151,7 +198,7 @@ class ReloadAnimation:
         if current_phase == 'reach_in':
             # Move from start position toward gun
             progress = self.get_phase_progress('reach_in')
-            eased_progress = self._ease_in_out(progress)
+            eased_progress = self._ease_in_out_cubic(progress)
             
             # Start position further left and lower
             start_pos = np.array([
@@ -167,7 +214,7 @@ class ReloadAnimation:
         elif current_phase == 'contact':
             # Move to exact contact with gun slide
             progress = self.get_phase_progress('contact')
-            eased_progress = self._ease_in_out(progress)
+            eased_progress = self._ease_in_out_cubic(progress)
             
             approach_pos = gun_reload_pos + np.array([0.15, 0, 0])
             contact_pos = gun_reload_pos  # Exact gun position
@@ -177,7 +224,7 @@ class ReloadAnimation:
         elif current_phase == 'pull_back':
             # Pull slide backward from gun position
             progress = self.get_phase_progress('pull_back')
-            eased_progress = self._ease_in_out(progress)
+            eased_progress = self._ease_in_out_cubic(progress)
             
             contact_pos = gun_reload_pos
             pulled_pos = gun_reload_pos + np.array([-0.25, 0, 0])  # Pull back from gun
@@ -187,7 +234,7 @@ class ReloadAnimation:
         elif current_phase == 'release':
             # Release slide forward relative to gun position
             progress = self.get_phase_progress('release')
-            eased_progress = self._ease_in_out(progress)
+            eased_progress = self._ease_out_bounce(progress)  # Bouncy release
             
             pulled_pos = gun_reload_pos + np.array([-0.25, 0, 0])
             released_pos = gun_reload_pos + np.array([0.1, 0, 0])  # Forward from gun
@@ -197,7 +244,7 @@ class ReloadAnimation:
         elif current_phase == 'retract':
             # Retract hand away from gun position
             progress = self.get_phase_progress('retract')
-            eased_progress = self._ease_in_out(progress)
+            eased_progress = self._ease_in_out_cubic(progress)
             
             released_pos = gun_reload_pos + np.array([0.1, 0, 0])
             retract_pos = np.array([
@@ -409,6 +456,52 @@ class ReloadAnimation:
     def _ease_in_out(self, t):
         """Smooth easing function for natural movement"""
         return t * t * (3.0 - 2.0 * t)
+    
+    def _ease_in_out_cubic(self, t):
+        """Smoother cubic easing for gun transitions"""
+        if t < 0.5:
+            return 4 * t * t * t
+        else:
+            return 1 - pow(-2 * t + 2, 3) / 2
+    
+    def _ease_out_bounce(self, t):
+        """Bouncy easing for slide release"""
+        if t < 1/2.75:
+            return 7.5625 * t * t
+        elif t < 2/2.75:
+            return 7.5625 * (t - 1.5/2.75) * t + 0.75
+        elif t < 2.5/2.75:
+            return 7.5625 * (t - 2.25/2.75) * t + 0.9375
+        else:
+            return 7.5625 * (t - 2.625/2.75) * t + 0.984375
+    
+    def _create_rotation_quaternion(self, axis, angle):
+        """Create a quaternion from axis and angle"""
+        axis = np.array(axis, dtype=float)
+        axis = axis / np.linalg.norm(axis)  # Normalize
+        
+        half_angle = angle / 2.0
+        sin_half = math.sin(half_angle)
+        cos_half = math.cos(half_angle)
+        
+        return np.array([
+            cos_half,
+            axis[0] * sin_half,
+            axis[1] * sin_half,
+            axis[2] * sin_half
+        ])
+    
+    def _combine_quaternions(self, q1, q2):
+        """Multiply two quaternions to combine rotations"""
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2
+        ])
     
     def _slerp_quaternions(self, q1, q2, t):
         """Spherical linear interpolation between two quaternions"""

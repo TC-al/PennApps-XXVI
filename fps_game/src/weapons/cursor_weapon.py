@@ -20,6 +20,10 @@ class QuaternionWeapon:
         # Target distance for aiming
         self.target_distance = 20.0
         
+        # Weapon model specific offsets (based on your pistol GLB model)
+        # These values are calibrated for the pistol model's actual barrel position
+        self.barrel_tip_offset = np.array([0.0, 0.2, -1.0])  # Tip is forward from weapon center
+        
     def update_aruco_position(self, degree):
         """Convert ArUco degree (0-180) to 3D world coordinates"""
         # Clamp degree to valid range
@@ -97,17 +101,28 @@ class QuaternionWeapon:
         return matrix
     
     def get_weapon_tip_position(self):
-        """Get the position of the weapon tip in world coordinates"""
+        """Get the position of the weapon tip (barrel end) in world coordinates"""
         weapon_pos = np.array(self.camera_pos) + self.weapon_offset
         
-        # Apply rotation to get tip offset (weapon extends forward)
-        tip_offset = np.array([0.0, 0.0, -0.4])  # Tip is 0.4 units forward from weapon center
-        
-        # Rotate tip offset by weapon quaternion
+        # Apply rotation to the barrel tip offset
         rotation_matrix = self.quaternion_to_matrix(self.quaternion)
-        rotated_offset = (rotation_matrix[:3, :3] @ tip_offset)
+        rotated_tip_offset = (rotation_matrix[:3, :3] @ self.barrel_tip_offset)
         
-        return weapon_pos + rotated_offset
+        # Return weapon center position + rotated tip offset
+        tip_position = weapon_pos + rotated_tip_offset
+        
+        # Debug output to help calibrate
+        if hasattr(self, '_debug_tip_counter'):
+            self._debug_tip_counter += 1
+        else:
+            self._debug_tip_counter = 0
+            
+        # Print debug info every 60 frames (1 second at 60 FPS)
+        if self._debug_tip_counter % 60 == 0:
+            print(f"Weapon tip position: ({tip_position[0]:.2f}, {tip_position[1]:.2f}, {tip_position[2]:.2f})")
+            print(f"Weapon center: ({weapon_pos[0]:.2f}, {weapon_pos[1]:.2f}, {weapon_pos[2]:.2f})")
+        
+        return tip_position
     
     def get_firing_direction(self):
         """Get the direction from weapon tip to ArUco target"""
@@ -149,3 +164,8 @@ class QuaternionWeapon:
     def get_aruco_degree(self):
         """Get the current ArUco degree for debugging"""
         return self.aruco_degree
+    
+    def calibrate_barrel_tip_offset(self, x_offset, y_offset, z_offset):
+        """Allow runtime calibration of barrel tip position"""
+        self.barrel_tip_offset = np.array([x_offset, y_offset, z_offset])
+        print(f"Barrel tip offset updated to: ({x_offset:.2f}, {y_offset:.2f}, {z_offset:.2f})")

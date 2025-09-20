@@ -1,4 +1,6 @@
-def shoot(camera, enemies, weapon_system, quaternion_weapon=None):
+from src.audio.sound_system import play_gun_sound
+
+def shoot(camera, enemies, weapon_system, quaternion_weapon=None, shooting_effects=None):
     """Handle shooting mechanics using cursor tracking - bullet comes from gun tip and goes to cursor"""
     
     # Check if weapon can shoot
@@ -8,6 +10,9 @@ def shoot(camera, enemies, weapon_system, quaternion_weapon=None):
             weapon_system.start_reload(quaternion_weapon.quaternion)
         return False
     
+    # Play gun sound effect
+    play_gun_sound()
+    
     if quaternion_weapon is None:
         # Fallback to original behavior if no quaternion weapon provided
         start_pos = [camera.x, camera.y, camera.z]
@@ -16,6 +21,10 @@ def shoot(camera, enemies, weapon_system, quaternion_weapon=None):
         # Use weapon tip position and cursor direction
         start_pos = quaternion_weapon.get_weapon_tip_position()
         direction = quaternion_weapon.get_firing_direction()
+    
+    # Trigger visual effects (muzzle flash, smoke, screen shake)
+    if shooting_effects is not None:
+        shooting_effects.trigger_shooting_effects(start_pos, direction)
     
     max_distance = 100.0
     

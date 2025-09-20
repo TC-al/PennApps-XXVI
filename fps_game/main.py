@@ -13,11 +13,13 @@ from src.rendering.environment import draw_skybox, draw_ground, draw_weapon_mode
 from src.rendering.ui import draw_crosshair, draw_health_bar, draw_ammo_display  # Crosshair is now empty
 from src.weapons.weapon import shoot  # Updated to use cursor tracking
 from src.weapons.weapon_system import WeaponSystem
+from src.systems.particles import ShootingEffects  # New visual effects system
 from src.core.render import Render
 from src.entities.player.health import HealthSystem
 from src.systems.collision import CollisionSystem
 from src.weapons.cursor_weapon import QuaternionWeapon  # New cursor tracking weapon
 from src.vision.estimate import Estimate  # ArUco marker detection
+from src.audio.sound_system import initialize_sound_system, cleanup_sound_system  # Sound system
 
 class Game:
     def __init__(self):
@@ -30,6 +32,12 @@ class Game:
         
         # Initialize OpenGL
         Render.init_opengl()
+        
+        # Initialize sound system
+        self.sound_system = initialize_sound_system()
+        
+        # Initialize shooting effects system
+        self.shooting_effects = ShootingEffects()
         
         # ArUco marker detection system
         self.estimator = Estimate()
@@ -155,10 +163,21 @@ class Game:
     def print_instructions(self):
         print("Controls:")
         print("ArUco Marker - Aim weapon (0-180 degrees)")
-        print("Left Click - Shoot")
+        print("Left Click - Shoot (with muzzle flash, smoke, and screen shake!)")
         print("R - Reload weapon (manual)")
+        print("S - Toggle sound on/off")
+        print("- / + - Decrease / Increase volume")
         print("ESC - Exit")
         print("Q - Close ArUco detection window")
+        print()
+        print("Barrel Position Calibration:")
+        print("1 - Move barrel tip forward")
+        print("2 - Move barrel tip backward")
+        print("3 - Move barrel tip up")
+        print("4 - Move barrel tip down")
+        print("5 - Move barrel tip right") 
+        print("6 - Move barrel tip left")
+        print()
         print(f"Survive! Destroy all {len(self.enemies)} AI enemies!")
         print("Watch out - they're coming for you!")
         print("Health: 100/100 - Don't let enemies touch you!")
@@ -166,6 +185,9 @@ class Game:
         print("NEW: Use ArUco marker to aim your weapon!")
         print("0° = far left, 90° = center, 180° = far right")
         print("Watch the beige arm perform the reload animation!")
+        print("Sound effects: gun.mp3 for shooting, reload.mp3 for reloading")
+        print("Visual effects: muzzle flash, smoke particles, and screen shake!")
+        print("Use calibration keys 1-6 to adjust barrel tip position for perfect effects alignment!")
     
     def handle_events(self):
         """Handle pygame events"""
@@ -184,10 +206,58 @@ class Game:
                 elif event.key == pygame.K_q:
                     # Close ArUco window
                     cv2.destroyWindow("ArUco Detection")
+                elif event.key == pygame.K_s:
+                    # Toggle sound on/off
+                    sound_enabled = self.sound_system.toggle_sound()
+                    print(f"Sound system {'enabled' if sound_enabled else 'disabled'}")
+                elif event.key == pygame.K_MINUS or event.key == pygame.K_KP_MINUS:
+                    # Decrease volume
+                    current_volume = self.sound_system.volume
+                    new_volume = max(0.0, current_volume - 0.1)
+                    self.sound_system.set_volume(new_volume)
+                    print(f"Volume: {int(new_volume * 100)}%")
+                elif event.key == pygame.K_EQUALS or event.key == pygame.K_KP_PLUS:
+                    # Increase volume (= key is usually + without shift)
+                    current_volume = self.sound_system.volume
+                    new_volume = min(1.0, current_volume + 0.1)
+                    self.sound_system.set_volume(new_volume)
+                    print(f"Volume: {int(new_volume * 100)}%")
+                # Calibration controls for barrel tip position
+                elif event.key == pygame.K_1:
+                    # Move barrel tip forward (negative Z)
+                    current_offset = self.quaternion_weapon.barrel_tip_offset
+                    self.quaternion_weapon.calibrate_barrel_tip_offset(
+                        current_offset[0], current_offset[1], current_offset[2] - 0.1)
+                elif event.key == pygame.K_2:
+                    # Move barrel tip backward (positive Z)
+                    current_offset = self.quaternion_weapon.barrel_tip_offset
+                    self.quaternion_weapon.calibrate_barrel_tip_offset(
+                        current_offset[0], current_offset[1], current_offset[2] + 0.1)
+                elif event.key == pygame.K_3:
+                    # Move barrel tip up (positive Y)
+                    current_offset = self.quaternion_weapon.barrel_tip_offset
+                    self.quaternion_weapon.calibrate_barrel_tip_offset(
+                        current_offset[0], current_offset[1] + 0.1, current_offset[2])
+                elif event.key == pygame.K_4:
+                    # Move barrel tip down (negative Y)
+                    current_offset = self.quaternion_weapon.barrel_tip_offset
+                    self.quaternion_weapon.calibrate_barrel_tip_offset(
+                        current_offset[0], current_offset[1] - 0.1, current_offset[2])
+                elif event.key == pygame.K_5:
+                    # Move barrel tip right (positive X)
+                    current_offset = self.quaternion_weapon.barrel_tip_offset
+                    self.quaternion_weapon.calibrate_barrel_tip_offset(
+                        current_offset[0] + 0.1, current_offset[1], current_offset[2])
+                elif event.key == pygame.K_6:
+                    # Move barrel tip left (negative X)
+                    current_offset = self.quaternion_weapon.barrel_tip_offset
+                    self.quaternion_weapon.calibrate_barrel_tip_offset(
+                        current_offset[0] - 0.1, current_offset[1], current_offset[2])
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left mouse button
-                    # Use ArUco-controlled weapon for shooting
-                    shoot_result = shoot(self.camera, self.enemies, self.weapon_system, self.quaternion_weapon)
+                    # Use ArUco-controlled weapon for shooting with visual effects
+                    shoot_result = shoot(self.camera, self.enemies, self.weapon_system, 
+                                       self.quaternion_weapon, self.shooting_effects)
                     if not shoot_result:
                         # Shooting failed - could be reloading, no ammo, or fire rate
                         if self.weapon_system.is_reloading:
@@ -205,6 +275,9 @@ class Game:
         
         # Update weapon system
         self.weapon_system.update()
+        
+        # Update shooting effects (muzzle flash, smoke, screen shake)
+        self.shooting_effects.update()
         
         # Update quaternion weapon with ArUco data (but only when not transitioning during reload)
         if not self.weapon_system.is_reloading:
@@ -249,6 +322,9 @@ class Game:
         # Clear screen
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         
+        # Apply screen shake BEFORE camera transformation
+        self.shooting_effects.apply_screen_shake()
+        
         # Apply camera transformation (fixed position)
         self.camera.apply()
         
@@ -262,14 +338,26 @@ class Game:
         # Draw weapon using ArUco tracking with reload transitions
         draw_weapon_model(self.quaternion_weapon, self.weapon_system)
         
+        # Render muzzle flash (uses stored position from when effect was triggered)
+        self.shooting_effects.render_muzzle_flash()
+        
+        # Render smoke effects
+        self.shooting_effects.render_smoke_effects()
+        
         # Draw enemies
         for enemy in self.enemies:
             enemy.draw()
         
-        # Draw UI
+        # Draw UI (render after 3D scene to ensure it's on top)
         draw_crosshair()  # This might be empty or show ArUco status
         draw_health_bar(self.health_system.get_health_percentage())
         draw_ammo_display(self.weapon_system)
+        
+        # Show effects debug info (optional)
+        if self.shooting_effects.is_any_effect_active():
+            effects_info = self.shooting_effects.get_effects_info()
+            if effects_info['muzzle_flash'] or effects_info['screen_shake']:
+                pass  # Could display debug info here if needed
         
         pygame.display.flip()
     
@@ -284,6 +372,8 @@ class Game:
         finally:
             # Clean up ArUco detection
             self.stop_aruco_detection()
+            # Clean up sound system
+            cleanup_sound_system()
         
         pygame.quit()
 
