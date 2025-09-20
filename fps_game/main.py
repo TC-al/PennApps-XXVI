@@ -78,6 +78,7 @@ class Game:
         print("Health: 100/100 - Don't let enemies touch you!")
         print(f"Ammo: {self.weapon_system.max_ammo} rounds per magazine")
         print("The weapon now follows your cursor and shoots from the gun tip!")
+        print("The weapon spins during reload animation!")
     
     def handle_events(self):
         """Handle pygame events"""
@@ -90,7 +91,7 @@ class Game:
                 elif event.key == pygame.K_r:
                     # Manual reload
                     if self.weapon_system.force_reload():
-                        print("Manual reload started!")
+                        print("Manual reload started! Watch the weapon spin!")
                     else:
                         print("Cannot reload now (already full or already reloading)")
             elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -162,8 +163,8 @@ class Game:
         # Draw cursor target for visualization (optional - can be removed)
         draw_cursor_target(self.quaternion_weapon)
         
-        # Draw weapon using cursor tracking
-        draw_weapon_model(self.quaternion_weapon)
+        # Draw weapon using cursor tracking - NOW PASSES WEAPON SYSTEM FOR RELOAD ANIMATION
+        draw_weapon_model(self.quaternion_weapon, self.weapon_system)
         
         # Draw enemies
         for enemy in self.enemies:

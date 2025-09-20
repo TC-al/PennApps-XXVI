@@ -324,16 +324,22 @@ class GLTFLoader:
         glRotatef(rotation[2], 0, 0, 1)
         glScalef(scale, scale, scale)
         
-        # Set material properties - make it bright and visible
-        glMaterialfv(GL_FRONT, GL_AMBIENT, [0.4, 0.4, 0.4, 1.0])
-        glMaterialfv(GL_FRONT, GL_DIFFUSE, [0.8, 0.6, 0.4, 1.0])  # Brownish/metallic
-        glMaterialfv(GL_FRONT, GL_SPECULAR, [0.7, 0.7, 0.7, 1.0])
-        glMaterialf(GL_FRONT, GL_SHININESS, 64.0)
+        # Ensure we're using material properties, not color
+        glDisable(GL_COLOR_MATERIAL)
+        
+        # Set dark/black material properties for the gun
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, [0.1, 0.1, 0.1, 1.0])      # Very dark ambient
+        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, [0.2, 0.2, 0.2, 1.0])      # Dark gray/black
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.3, 0.3, 0.3, 1.0])     # Subtle specular
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 32.0)                      # Medium shininess
         
         # Render each mesh
         for i, mesh in enumerate(model_data['meshes']):
             for j, primitive in enumerate(mesh['primitives']):
                 self._render_primitive(primitive, i, j)
+        
+        # Re-enable color material for other objects
+        glEnable(GL_COLOR_MATERIAL)
         
         glPopMatrix()
     
@@ -469,9 +475,14 @@ def render_fallback_pistol(position=(0, 0, 0), rotation=(0, 0, 0), scale=1.0):
     glRotatef(rotation[2], 0, 0, 1)
     glScalef(scale, scale, scale)
     
-    # Set bright color so it's visible
-    glMaterialfv(GL_FRONT, GL_AMBIENT, [0.6, 0.3, 0.3, 1.0])
-    glMaterialfv(GL_FRONT, GL_DIFFUSE, [0.9, 0.5, 0.5, 1.0])
+    # Ensure we're using material properties, not color
+    glDisable(GL_COLOR_MATERIAL)
+    
+    # Set black/dark gray material properties
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, [0.1, 0.1, 0.1, 1.0])      # Very dark ambient
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, [0.2, 0.2, 0.2, 1.0])      # Dark gray
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.3, 0.3, 0.3, 1.0])     # Subtle specular
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 32.0)                      # Medium shininess
     
     # Draw a simple box (pistol shape)
     glBegin(GL_QUADS)
@@ -519,6 +530,9 @@ def render_fallback_pistol(position=(0, 0, 0), rotation=(0, 0, 0), scale=1.0):
     glVertex3f(-0.1, 0.05, -0.1)
     
     glEnd()
+    
+    # Re-enable color material for other objects
+    glEnable(GL_COLOR_MATERIAL)
     
     glPopMatrix()
 

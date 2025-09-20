@@ -69,7 +69,7 @@ def draw_ground():
     glEnd()
     glEnable(GL_LIGHTING)  # Re-enable lighting
 
-def draw_weapon_model(quaternion_weapon):
+def draw_weapon_model(quaternion_weapon, weapon_system=None):
     """Draw the pistol model using quaternion-based positioning"""
     # Apply weapon transformation (this pushes matrix)
     if quaternion_weapon.apply_weapon_transform():
@@ -77,11 +77,19 @@ def draw_weapon_model(quaternion_weapon):
         # Reduced scale for smaller weapon size
         weapon_scale = 50.0  # Reduced from 100.0
         
+        # Calculate reload spin animation - Y-axis rotation (720 degrees)
+        reload_rotation = 0
+        if weapon_system and weapon_system.is_reloading:
+            # Get reload progress (0.0 to 1.0)
+            progress = weapon_system.get_reload_progress()
+            # Spin 720 degrees (2 full rotations) during reload on Y-axis
+            reload_rotation = progress * 720.0
+        
         # Render the pistol model at origin (transformation already applied)
-        # Adjusted rotation and centering
+        # Add reload spin to the yaw rotation (Y-axis)
         render_pistol(
             position=(0, 0, 0),  # Centered at origin since transform is already applied
-            rotation=(-90, 0, 90),  # Fixed orientation: pitch -90, yaw 0, roll 90
+            rotation=(-90 - reload_rotation, 0, 90),  # Y-axis spin during reload
             scale=weapon_scale
         )
         
