@@ -5,6 +5,7 @@ import random
 import cv2
 import threading
 import time
+import math
 
 # Import our modules
 from src.core.camera import Camera  # Now fixed position camera
@@ -18,7 +19,7 @@ from src.core.render import Render
 from src.entities.player.health import HealthSystem
 from src.systems.collision import CollisionSystem
 from src.weapons.cursor_weapon import QuaternionWeapon  # New cursor tracking weapon
-from src.vision.estimate import Estimate  # ArUco marker detection
+from src.vision.estimate import Estimate  # Updated ArUco marker detection
 from src.audio.sound_system import initialize_sound_system, cleanup_sound_system  # Sound system
 
 class Game:
@@ -28,7 +29,7 @@ class Game:
         # Set up display
         self.display = (800, 600)
         pygame.display.set_mode(self.display, DOUBLEBUF | OPENGL)
-        pygame.display.set_caption("3D Shooting Game - ArUco Aiming")
+        pygame.display.set_caption("3D Shooting Game - ArUco Position & Aiming")
         
         # Initialize OpenGL
         Render.init_opengl()
@@ -43,7 +44,8 @@ class Game:
         self.estimator = Estimate()
         self.aruco_thread = None
         self.aruco_running = False
-        self.current_degree = 90.0  # Default to center position
+        self.current_d = 0.0  # Position along diameter
+        self.current_alpha = 0.0  # Aiming angle in radians
         self.aruco_lock = threading.Lock()
         
         # Start ArUco detection in separate thread
@@ -103,11 +105,27 @@ class Game:
                     # Process frame for ArUco markers
                     frame = self.estimator.get_measurements(frame)
                     
-                    # Update degree value thread-safely
-                    with self.aruco_lock:
-                        self.current_degree = self.estimator.in_game_deg
+                    # Draw the semi-gauge visualization
+                    frame = self.estimator.draw_semi_gauge(
+                        frame,
+                        center=(180, 500),
+                        radius_px=120,
+                        r_world=0.4,
+                        d_world=self.estimator.d,
+                        arc_deg=0.0,  # You might want to calculate this from your data
+                        alpha_rad=self.estimator.alpha,
+                        color_circle=(100,100,100),
+                        color_arc=(80,180,255),
+                        color_line=(0,0,255),
+                        color_angle=(0,255,0)
+                    )
                     
-                    # Show ArUco detection window (optional - can be disabled for production)
+                    # Update position and angle values thread-safely
+                    with self.aruco_lock:
+                        self.current_d = self.estimator.d
+                        self.current_alpha = self.estimator.alpha
+                    
+                    # Show ArUco detection window
                     cv2.imshow("ArUco Detection", frame)
                     
                     # Break if 'q' is pressed in the ArUco window
@@ -162,7 +180,7 @@ class Game:
     
     def print_instructions(self):
         print("Controls:")
-        print("ArUco Marker - Aim weapon (0-180 degrees)")
+        print("ArUco Marker - Position AND aim weapon (d position, alpha angle)")
         print("Left Click - Shoot (with muzzle flash, smoke, and screen shake!)")
         print("R - Reload weapon (manual)")
         print("S - Toggle sound on/off")
@@ -182,12 +200,10 @@ class Game:
         print("Watch out - they're coming for you!")
         print("Health: 100/100 - Don't let enemies touch you!")
         print(f"Ammo: {self.weapon_system.max_ammo} rounds per magazine")
-        print("NEW: Use ArUco marker to aim your weapon!")
-        print("0° = far left, 90° = center, 180° = far right")
-        print("Watch the beige arm perform the reload animation!")
-        print("Sound effects: gun.mp3 for shooting, reload.mp3 for reloading")
-        print("Visual effects: muzzle flash, smoke particles, and screen shake!")
-        print("Use calibration keys 1-6 to adjust barrel tip position for perfect effects alignment!")
+        print("NEW: ArUco marker controls BOTH weapon position AND aiming!")
+        print("Position (d): Move along diameter to position weapon left/right")
+        print("Angle (alpha): Tilt marker to aim up/down and adjust direction")
+        print("Watch the gun move and aim based on your marker position!")
     
     def handle_events(self):
         """Handle pygame events"""
@@ -281,13 +297,31 @@ class Game:
         
         # Update quaternion weapon with ArUco data (but only when not transitioning during reload)
         if not self.weapon_system.is_reloading:
-            # Get current ArUco degree thread-safely
+            # Get current ArUco position and angle thread-safely
             with self.aruco_lock:
-                current_aruco_degree = self.current_degree
+                current_d = self.current_d
+                current_alpha = self.current_alpha
             
-            # Update weapon orientation based on ArUco marker
-            self.quaternion_weapon.update_with_aruco(current_aruco_degree)
+            # Update weapon position and orientation based on ArUco marker
+            # Now passing both d and alpha values instead of just degree
+            self.quaternion_weapon.update_with_aruco(current_d, current_alpha)
             
+            # Debug output every 60 frames (1 second at 60 FPS)
+            if hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+            else:
+                self._debug_counter = 0
+                
+            if self._debug_counter % 60 == 0:
+                print(f"ArUco data - d: {current_d:.3f}, alpha: {current_alpha:.3f} rad ({math.degrees(current_alpha):.1f}°)")
+                weapon_pos = self.quaternion_weapon.get_weapon_tip_position()
+                print(f"Weapon tip position: ({weapon_pos[0]:.2f}, {weapon_pos[1]:.2f}, {weapon_pos[2]:.2f})")
+                
+                # Additional debug info for geometry
+                geometry_info = self.quaternion_weapon.get_geometry_debug_info()
+                print(f"Geometry - P: ({geometry_info['point_P'][0]:.3f}, {geometry_info['point_P'][1]:.3f}), " + 
+                      f"E: ({geometry_info['point_E'][0]:.3f}, {geometry_info['point_E'][1]:.3f})")
+        
         # Get player position for collision detection (camera position since camera is fixed)
         player_pos = [self.camera.x, self.camera.y, self.camera.z]
         
@@ -332,7 +366,7 @@ class Game:
         draw_skybox()
         draw_ground()
         
-        # Draw cursor target for visualization (shows where ArUco is pointing)
+        # Draw cursor target for visualization (shows where ArUco is aiming)
         draw_cursor_target(self.quaternion_weapon)
         
         # Draw weapon using ArUco tracking with reload transitions
@@ -353,12 +387,6 @@ class Game:
         draw_health_bar(self.health_system.get_health_percentage())
         draw_ammo_display(self.weapon_system)
         
-        # Show effects debug info (optional)
-        if self.shooting_effects.is_any_effect_active():
-            effects_info = self.shooting_effects.get_effects_info()
-            if effects_info['muzzle_flash'] or effects_info['screen_shake']:
-                pass  # Could display debug info here if needed
-        
         pygame.display.flip()
     
     def run(self):
@@ -378,6 +406,7 @@ class Game:
         pygame.quit()
 
 def main():
+    import math  # Import for debugging output
     game = Game()
     game.run()
 

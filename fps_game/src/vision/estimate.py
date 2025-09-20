@@ -4,6 +4,7 @@ import math
 from collections import deque
 import json
 import os
+from src.vision.geometry_viewer import GeometryViewer
 
 class Estimate:
     MARKER_SIZE_M = 0.03
@@ -11,10 +12,7 @@ class Estimate:
     HEIGHT = 720
     
     def __init__(self):
-        # Initialize distortion coefficients first
         self.dist = np.array([0, 0, 0, 0, 0], dtype=np.float64)
-        
-        # Camera intrinsics 
         try:
             calib_path = os.path.join(os.getcwd(), "calib.json")  # Fixed path join
             with open(calib_path, "r") as f:
@@ -49,77 +47,93 @@ class Estimate:
         ], dtype=np.float32)
         
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        self.in_game_deg = 90.0  # Default to center position
+        self.d, self.alpha = 0, 0
+        
+        self.viewer = GeometryViewer("Degree and Pos Visualizer")
 
     def draw_semi_gauge(
         self,
         frame,
-        center=(180, 500),        # (x,y) pixels
-        radius=120,               # dial radius in px
-        value_deg=0.0,            # current value in degrees
-        min_deg=-90.0,            # dial range min (left end)
-        max_deg= 90.0,            # dial range max (right end)
-        color_arc=(100, 100, 100),
-        color_tick=(100, 100, 100),
-        color_needle=(0, 0, 255),
+        center=(180, 500),      # circle center in pixels
+        radius_px=120,          # circle radius in pixels (for drawing)
+        r_world=0.4,            # your circle radius r (same units as d)
+        d_world=0.0,            # your d (can be +/-)
+        arc_deg=0.0,            # arc angle in DEGREES from the TOP of circle; cw positive if you used x/WIDTH*180 - 90
+        alpha_rad=0.0,          # the angle at P to the diameter (in RADIANS)
+        color_circle=(100,100,100),
+        color_arc=(80,180,255),
+        color_line=(0,0,255),
+        color_angle=(0,255,0)
     ):
         """
-        Draw a 180° gauge (semi-circle) with ticks and a needle pointing at value_deg.
-        Angle mapping: min_deg -> left end, max_deg -> right end, 0 centered.
+        Draw: semi-circle, the arc from top to arc_deg, point P at (d,0),
+        the chord from P to the arc end E, and the small angle alpha at P.
+
+        Geometry:
+        - Circle center at 'center' (pixels), radius 'radius_px' (pixels).
+        - World r_world, d_world only used to place P along the diameter:
+            P_x = center_x + (d/r)*radius_px, P_y = center_y.
+        - Arc starts at the TOP of the circle; arc_deg ∈ [-90, +90] like your mapping.
         """
+        import numpy as np
+        import cv2
         x0, y0 = center
-        h, w = frame.shape[:2]
-        if not (0 <= x0 < w and 0 <= y0 < h):
-            return frame
 
-        # Clamp and norm
-        val = float(np.clip(value_deg, min_deg, max_deg))
-        # Map value to angle on screen: left = 180°, right = 0°, top = 90°
-        # We'll render arc from 180° to 0° (OpenCV uses degrees, 0° = +x axis, counter-clockwise positive)
-        def val_to_screen_deg(v):
-            t = (v - min_deg) / (max_deg - min_deg) 
-            return 180.0 * (1.0 - t)
+        # --- helper: map arc_deg in [-90..+90] to screen angle in [180..0]
+        # (OpenCV ellipse: 0° = +x axis, CCW positive; top is 90°)
+        t = (arc_deg - (-90.0)) / (180.0)      # normalize -90..+90 to 0..1
+        scr_end_deg = 180.0 * (1.0 - t)        # 180..0
+        scr_end_deg = float(np.clip(scr_end_deg, 0.0, 180.0))
 
-        thickness_arc = 10
-        cv2.ellipse(frame, (x0, y0), (radius, radius),
+        # --- circle outline (semi only)
+        cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
                     angle=0, startAngle=180, endAngle=0,
-                    color=color_arc, thickness=thickness_arc, lineType=cv2.LINE_AA)
+                    color=color_circle, thickness=2, lineType=cv2.LINE_AA)
 
-        major_ticks = 5
-        minor_per_major = 4
-        for i in range(major_ticks + 1):
-            scr_deg = 180.0 - (180.0 * i / major_ticks)
-            ang = np.deg2rad(scr_deg)
-            r1 = radius - 2
-            r2 = radius - 16
-            x1 = int(x0 + r1 * np.cos(ang))
-            y1 = int(y0 - r1 * np.sin(ang))
-            x2 = int(x0 + r2 * np.cos(ang))
-            y2 = int(y0 - r2 * np.sin(ang))
-            cv2.line(frame, (x1, y1), (x2, y2), color_tick, 2, cv2.LINE_AA)
+        # --- draw the arc from top (180→90) continuing to scr_end_deg
+        # Split in two segments to handle left/right halves cleanly
+        if scr_end_deg <= 90:
+            # left half (180→90) then (90→scr_end_deg)
+            cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
+                        0, 180, 90, color_arc, 4, cv2.LINE_AA)
+            cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
+                        0, 90, scr_end_deg, color_arc, 4, cv2.LINE_AA)
+        else:
+            # arc goes only within left half
+            cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
+                        0, 180, scr_end_deg, color_arc, 4, cv2.LINE_AA)
 
-            # Minor ticks between majors
-            if i < major_ticks:
-                for m in range(1, minor_per_major):
-                    frac = (i + m / minor_per_major) / major_ticks
-                    scr_deg_m = 180.0 - 180.0 * frac
-                    angm = np.deg2rad(scr_deg_m)
-                    rm1 = radius - 2
-                    rm2 = radius - 10
-                    xm1 = int(x0 + rm1 * np.cos(angm))
-                    ym1 = int(y0 - rm1 * np.sin(angm))
-                    xm2 = int(x0 + rm2 * np.cos(angm))
-                    ym2 = int(y0 - rm2 * np.sin(angm))
-                    cv2.line(frame, (xm1, ym1), (xm2, ym2), color_tick, 1, cv2.LINE_AA)
+        # --- compute arc end point E in pixels from screen angle
+        ang = np.deg2rad(scr_end_deg)
+        Ex = int(round(x0 + radius_px * np.cos(ang)))
+        Ey = int(round(y0 - radius_px * np.sin(ang)))  # y down
 
-        # Needle
-        scr_deg_val = val_to_screen_deg(val)
-        angv = np.deg2rad(scr_deg_val)
-        r_need = radius - 20
-        xn = int(x0 + r_need * np.cos(angv))
-        yn = int(y0 - r_need * np.sin(angv))
-        cv2.line(frame, (x0, y0), (xn, yn), color_needle, 3, cv2.LINE_AA)
-        cv2.circle(frame, (x0, y0), 5, color_needle, -1, cv2.LINE_AA)
+        # --- compute P=(d,0) mapped to pixels along the diameter
+        # scale d/r by radius_px
+        Px = int(round(x0 + (d_world / (r_world if r_world != 0 else 1e-6)) * radius_px))
+        Py = y0
+
+        # --- draw chord P->E
+        cv2.line(frame, (Px, Py), (Ex, Ey), color_line, 3, cv2.LINE_AA)
+        cv2.circle(frame, (Px, Py), 5, color_line, -1, cv2.LINE_AA)
+        cv2.circle(frame, (Ex, Ey), 5, color_line, -1, cv2.LINE_AA)
+
+        # --- draw small angle alpha at P, measured from the diameter (x-axis) toward chord
+        # alpha_rad is in standard math coords; image y is down → use y0 - sin()
+        small_r = max(8, int(0.12 * radius_px))
+        # determine direction sign from alpha
+        steps = 24
+        phis = np.linspace(0, alpha_rad, steps)  # 0 is along +x; positive alpha is CCW (up)
+        arc_pts = np.stack([
+            Px + small_r * np.cos(phis),
+            Py - small_r * np.sin(phis)  # y down
+        ], axis=1).astype(np.int32)
+        if len(arc_pts) >= 2:
+            cv2.polylines(frame, [arc_pts], isClosed=False, color=color_angle, thickness=2, lineType=cv2.LINE_AA)
+        cv2.circle(frame, (Px, Py), 3, color_angle, -1, cv2.LINE_AA)
+
+        return frame
+
 
     def get_inplane_angle(self, rvec):
         """Return marker orientation about camera Z-axis in degrees [-180, 180]."""
@@ -141,7 +155,7 @@ class Estimate:
         Z = (fx * self.MARKER_SIZE_M) / side_px
         return Z * 1.39 # 1.39 determined experimentally
     
-    def get_degree_in_game(self, rvec, tvec, frame):
+    def get_degree_in_game(self, rvec, tvec, frame, ok_pnp):
         point_3d = np.array([[0, 0, 0]], dtype=np.float32)  # marker center
         point_2d, _ = cv2.projectPoints(point_3d, rvec, tvec, self.K, self.dist)
 
@@ -149,30 +163,23 @@ class Estimate:
         cv2.circle(frame, (int(x), int(y)), 20, (0, 0, 255), 10)
         
         # Get ratio of x pos / total width, convert to a degree by doing ratio * 180
-        # Clamp x position to screen bounds to avoid invalid degrees
-        x_clamped = max(0, min(self.WIDTH, x))
-        self.in_game_deg = (x_clamped / self.WIDTH) * 180
-        
-        # Convert to range for gauge display (-90 to +90)
-        gauge_deg = self.in_game_deg - 90
-        self.draw_semi_gauge(frame, value_deg=gauge_deg)
-        
+        artistic = 0.80 # This factor makes it so the gun doesn't actually move that much, for better artisitc value
+        r = 0.4 # Radius
+        self.d = (x / self.WIDTH * r - r / 2) * artistic
+        arc_deg = x / self.WIDTH * 180 - 90
+      
+        self.alpha, _ = self.viewer.update(r=0.4, d=self.d, arc_deg=arc_deg)
+
     def get_measurements(self, frame):
         corners, ids, _ = self.detector.detectMarkers(frame)
-
+        
         if ids is not None and len(ids) > 0:
             self.aruco.drawDetectedMarkers(frame, corners, ids)
-
             for c in corners:
                 c = c.reshape(-1, 2).astype(np.float32)
                 # rvec is rotation vector (stores rotation of aruco relative to cam), tvec is translation vector relative to camera
                 ok_pnp, rvec, tvec = cv2.solvePnP(self.objp, c, self.K, self.dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
-                if ok_pnp:  # Only process if pose estimation was successful
-                    self.get_degree_in_game(rvec, tvec, frame)
-        else:
-            # No markers detected, maintain current position and draw gauge
-            gauge_deg = self.in_game_deg - 90
-            self.draw_semi_gauge(frame, value_deg=gauge_deg)
+                self.get_degree_in_game(rvec, tvec, frame, ok_pnp)
                 
         return frame
 

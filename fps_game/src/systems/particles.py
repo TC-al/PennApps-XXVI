@@ -24,9 +24,10 @@ class ShootingEffects:
         # Screen shake settings
         self.screen_shake_active = False
         self.screen_shake_start_time = 0
-        self.screen_shake_duration = 0.15  # 150ms shake
-        self.screen_shake_intensity = 0.8
+        self.screen_shake_duration = 0.25  # Longer duration for recoil
+        self.screen_shake_intensity = 1.2  # Stronger intensity
         self.shake_offset = np.array([0.0, 0.0, 0.0])
+        self.recoil_recovery_factor = 0.3  # How much the gun settles back down
         
         # Flash colors for different intensities
         self.flash_colors = {
@@ -79,19 +80,44 @@ class ShootingEffects:
                 self.screen_shake_active = False
                 self.shake_offset = np.array([0.0, 0.0, 0.0])
             else:
-                # Calculate shake intensity (starts strong, fades out)
+                # Calculate recoil pattern (upward kick followed by recovery)
                 progress = elapsed / self.screen_shake_duration
-                intensity = self.screen_shake_intensity * (1.0 - progress)
                 
-                # Generate random shake offset with decreasing amplitude
-                frequency = 30.0  # Shake frequency
-                time_factor = elapsed * frequency
-                
-                self.shake_offset = np.array([
-                    intensity * math.sin(time_factor * 1.7) * random.uniform(-0.5, 0.5),
-                    intensity * math.cos(time_factor * 2.3) * random.uniform(-0.3, 0.3),
-                    intensity * math.sin(time_factor * 1.1) * random.uniform(-0.2, 0.2)
-                ]) * 0.01  # Scale down the shake
+                # Recoil phases
+                if progress < 0.2:  # Initial upward kick (first 20%)
+                    kick_progress = progress / 0.2
+                    intensity = self.screen_shake_intensity * (1.0 - kick_progress * 0.3)  # Strong start, slight decrease
+                    
+                    # Strong upward recoil with slight backward movement
+                    self.shake_offset = np.array([
+                        random.uniform(-0.3, 0.3) * intensity * 0.01,     # Slight horizontal variation
+                        intensity * 0.025 * (1.0 + kick_progress * 0.5),  # Strong upward kick
+                        intensity * 0.015 * kick_progress                   # Slight backward movement
+                    ])
+                    
+                elif progress < 0.6:  # Recovery phase (20% to 60%)
+                    recovery_progress = (progress - 0.2) / 0.4
+                    intensity = self.screen_shake_intensity * (0.7 - recovery_progress * 0.4)  # Gradual decrease
+                    
+                    # Camera settling back down with oscillation
+                    oscillation = math.sin(recovery_progress * math.pi * 4) * (1.0 - recovery_progress)
+                    
+                    self.shake_offset = np.array([
+                        random.uniform(-0.2, 0.2) * intensity * 0.008,     # Reduced horizontal shake
+                        intensity * 0.015 * oscillation,                   # Oscillating vertical movement
+                        intensity * 0.01 * (1.0 - recovery_progress)       # Return from backward movement
+                    ])
+                    
+                else:  # Final settle (60% to 100%)
+                    settle_progress = (progress - 0.6) / 0.4
+                    intensity = self.screen_shake_intensity * 0.3 * (1.0 - settle_progress)  # Final fade
+                    
+                    # Very subtle final movements
+                    self.shake_offset = np.array([
+                        random.uniform(-0.1, 0.1) * intensity * 0.005,     # Minimal horizontal
+                        intensity * 0.008 * (1.0 - settle_progress),       # Settling down
+                        0.0                                                 # No backward movement
+                    ])
         
         # Update smoke particles
         self._update_smoke_particles()
@@ -99,7 +125,29 @@ class ShootingEffects:
     def apply_screen_shake(self):
         """Apply screen shake transformation (call before rendering scene)"""
         if self.screen_shake_active:
+            # Apply translation shake
             glTranslatef(self.shake_offset[0], self.shake_offset[1], self.shake_offset[2])
+            
+            # Add subtle rotational recoil for more realism
+            elapsed = time.time() - self.screen_shake_start_time
+            progress = elapsed / self.screen_shake_duration
+            
+            if progress < 0.3:  # Initial recoil rotation
+                kick_intensity = (1.0 - progress / 0.3) * 0.8
+                # Slight upward rotation (pitch) and random roll
+                pitch_rotation = kick_intensity * 1.2  # Degrees
+                roll_rotation = kick_intensity * random.uniform(-0.8, 0.8)
+                
+                glRotatef(pitch_rotation, 1, 0, 0)  # Pitch up
+                glRotatef(roll_rotation, 0, 0, 1)   # Roll left/right
+                
+            elif progress < 0.7:  # Recovery rotation
+                recovery_progress = (progress - 0.3) / 0.4
+                settle_intensity = 0.8 * (1.0 - recovery_progress)
+                oscillation = math.sin(recovery_progress * math.pi * 3) * settle_intensity
+                
+                glRotatef(oscillation * 0.6, 1, 0, 0)  # Settling pitch oscillation
+                glRotatef(oscillation * 0.3, 0, 0, 1)  # Settling roll oscillation
     
     def render_muzzle_flash(self, weapon_tip_position=None, weapon_direction=None):
         """Render muzzle flash effect at weapon tip"""
