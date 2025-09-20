@@ -1,45 +1,8 @@
 from OpenGL.GL import *
 
 def draw_crosshair():
-    # Save current matrices
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    
-    glMatrixMode(GL_MODELVIEW)
-    glPushMatrix()
-    glLoadIdentity()
-    
-    # Disable depth testing and lighting for crosshair
-    glDisable(GL_DEPTH_TEST)
-    glDisable(GL_LIGHTING)
-    
-    # Draw crosshair
-    glColor3f(1.0, 1.0, 1.0)  # White crosshair
-    glLineWidth(2.0)
-    
-    crosshair_size = 0.02
-    
-    glBegin(GL_LINES)
-    # Horizontal line
-    glVertex2f(-crosshair_size, 0.0)
-    glVertex2f(crosshair_size, 0.0)
-    # Vertical line
-    glVertex2f(0.0, -crosshair_size)
-    glVertex2f(0.0, crosshair_size)
-    glEnd()
-    
-    glLineWidth(1.0)
-    
-    # Restore settings
-    glEnable(GL_DEPTH_TEST)
-    glEnable(GL_LIGHTING)
-    
-    # Restore matrices
-    glPopMatrix()
-    glMatrixMode(GL_PROJECTION)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
+    """Crosshair removed - weapon now aims at cursor position"""
+    pass
 
 def draw_health_bar(health_percentage):
     """Draw health bar in top-left corner"""
@@ -103,7 +66,7 @@ def draw_health_bar(health_percentage):
     text_y = bar_y + bar_height + 0.03
     glLineWidth(1.5)
     
-    # Simple "HEALTH" text using basic lines - just "HP" for simplicity
+    # Simple "HP" text using basic lines
     glBegin(GL_LINES)
     # H
     glVertex2f(bar_x, text_y)
@@ -250,7 +213,6 @@ def draw_ammo_display(weapon_system):
     else:
         text_y = ammo_y + bullet_size * 2 + 0.02  # Above bullets
     
-    ammo_text = f"{current_ammo}/{max_ammo}"
     _draw_simple_text("AMMO", start_x + total_width/2 - 0.04, text_y)
     
     # Restore settings
@@ -379,3 +341,7 @@ def _draw_char(char, x, y, size):
         glVertex2f(x, y)
     
     glEnd()
+
+def draw_cursor_indicator():
+    """Draw a small indicator showing cursor position - optional function"""
+    pass
