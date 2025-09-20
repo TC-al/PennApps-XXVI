@@ -12,26 +12,25 @@ class Estimate:
     HEIGHT = 720
     
     def __init__(self):
+        # Camera intrinsics 
+        # Get the directory where this script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        calib_path = os.path.join(script_dir, "calib.json")
+        
+        # If calib.json is not in the same directory as estimate.py, 
+        # try looking in the project root directory
+        if not os.path.exists(calib_path):
+            # Go up to the project root (assuming structure: fps_game/src/vision/estimate.py)
+            project_root = os.path.dirname(os.path.dirname(script_dir))
+            calib_path = os.path.join(project_root, "calib.json")
+        
+        with open(calib_path, "r") as f:
+            self.data = json.load(f)
+            
+        self.K = np.array([[self.data["fx"], 0, self.data["cx"]],
+                    [0, self.data["fy"], self.data["cy"]],
+                    [0,  0,  1]], dtype=np.float64)
         self.dist = np.array([0, 0, 0, 0, 0], dtype=np.float64)
-        try:
-            calib_path = os.path.join(os.getcwd(), "calib.json")  # Fixed path join
-            with open(calib_path, "r") as f:
-                self.data = json.load(f)
-            self.K = np.array([[self.data["fx"], 0, self.data["cx"]],
-                        [0, self.data["fy"], self.data["cy"]],
-                        [0,  0,  1]], dtype=np.float64)
-            print("Loaded camera calibration from calib.json")
-        except FileNotFoundError:
-            print("Warning: calib.json not found, using default camera matrix")
-            # Default camera matrix for 1280x720
-            self.K = np.array([[800.0, 0, 640.0],
-                        [0, 800.0, 360.0],
-                        [0,  0,  1]], dtype=np.float64)
-        except Exception as e:
-            print(f"Error loading calibration: {e}, using default camera matrix")
-            self.K = np.array([[800.0, 0, 640.0],
-                        [0, 800.0, 360.0],
-                        [0,  0,  1]], dtype=np.float64)
         
         self.aruco = cv2.aruco
         dic = self.aruco.getPredefinedDictionary(self.aruco.DICT_4X4_50)
@@ -49,91 +48,11 @@ class Estimate:
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         self.d, self.alpha = 0, 0
         
+        # Add properties to store both position and orientation
+        self.weapon_position_offset = 0.0  # Horizontal offset for weapon position
+        self.weapon_orientation_alpha = 0.0  # Orientation angle in radians
+        
         self.viewer = GeometryViewer("Degree and Pos Visualizer")
-
-    def draw_semi_gauge(
-        self,
-        frame,
-        center=(180, 500),      # circle center in pixels
-        radius_px=120,          # circle radius in pixels (for drawing)
-        r_world=0.4,            # your circle radius r (same units as d)
-        d_world=0.0,            # your d (can be +/-)
-        arc_deg=0.0,            # arc angle in DEGREES from the TOP of circle; cw positive if you used x/WIDTH*180 - 90
-        alpha_rad=0.0,          # the angle at P to the diameter (in RADIANS)
-        color_circle=(100,100,100),
-        color_arc=(80,180,255),
-        color_line=(0,0,255),
-        color_angle=(0,255,0)
-    ):
-        """
-        Draw: semi-circle, the arc from top to arc_deg, point P at (d,0),
-        the chord from P to the arc end E, and the small angle alpha at P.
-
-        Geometry:
-        - Circle center at 'center' (pixels), radius 'radius_px' (pixels).
-        - World r_world, d_world only used to place P along the diameter:
-            P_x = center_x + (d/r)*radius_px, P_y = center_y.
-        - Arc starts at the TOP of the circle; arc_deg ∈ [-90, +90] like your mapping.
-        """
-        import numpy as np
-        import cv2
-        x0, y0 = center
-
-        # --- helper: map arc_deg in [-90..+90] to screen angle in [180..0]
-        # (OpenCV ellipse: 0° = +x axis, CCW positive; top is 90°)
-        t = (arc_deg - (-90.0)) / (180.0)      # normalize -90..+90 to 0..1
-        scr_end_deg = 180.0 * (1.0 - t)        # 180..0
-        scr_end_deg = float(np.clip(scr_end_deg, 0.0, 180.0))
-
-        # --- circle outline (semi only)
-        cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
-                    angle=0, startAngle=180, endAngle=0,
-                    color=color_circle, thickness=2, lineType=cv2.LINE_AA)
-
-        # --- draw the arc from top (180→90) continuing to scr_end_deg
-        # Split in two segments to handle left/right halves cleanly
-        if scr_end_deg <= 90:
-            # left half (180→90) then (90→scr_end_deg)
-            cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
-                        0, 180, 90, color_arc, 4, cv2.LINE_AA)
-            cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
-                        0, 90, scr_end_deg, color_arc, 4, cv2.LINE_AA)
-        else:
-            # arc goes only within left half
-            cv2.ellipse(frame, (x0, y0), (radius_px, radius_px),
-                        0, 180, scr_end_deg, color_arc, 4, cv2.LINE_AA)
-
-        # --- compute arc end point E in pixels from screen angle
-        ang = np.deg2rad(scr_end_deg)
-        Ex = int(round(x0 + radius_px * np.cos(ang)))
-        Ey = int(round(y0 - radius_px * np.sin(ang)))  # y down
-
-        # --- compute P=(d,0) mapped to pixels along the diameter
-        # scale d/r by radius_px
-        Px = int(round(x0 + (d_world / (r_world if r_world != 0 else 1e-6)) * radius_px))
-        Py = y0
-
-        # --- draw chord P->E
-        cv2.line(frame, (Px, Py), (Ex, Ey), color_line, 3, cv2.LINE_AA)
-        cv2.circle(frame, (Px, Py), 5, color_line, -1, cv2.LINE_AA)
-        cv2.circle(frame, (Ex, Ey), 5, color_line, -1, cv2.LINE_AA)
-
-        # --- draw small angle alpha at P, measured from the diameter (x-axis) toward chord
-        # alpha_rad is in standard math coords; image y is down → use y0 - sin()
-        small_r = max(8, int(0.12 * radius_px))
-        # determine direction sign from alpha
-        steps = 24
-        phis = np.linspace(0, alpha_rad, steps)  # 0 is along +x; positive alpha is CCW (up)
-        arc_pts = np.stack([
-            Px + small_r * np.cos(phis),
-            Py - small_r * np.sin(phis)  # y down
-        ], axis=1).astype(np.int32)
-        if len(arc_pts) >= 2:
-            cv2.polylines(frame, [arc_pts], isClosed=False, color=color_angle, thickness=2, lineType=cv2.LINE_AA)
-        cv2.circle(frame, (Px, Py), 3, color_angle, -1, cv2.LINE_AA)
-
-        return frame
-
 
     def get_inplane_angle(self, rvec):
         """Return marker orientation about camera Z-axis in degrees [-180, 180]."""
@@ -155,7 +74,8 @@ class Estimate:
         Z = (fx * self.MARKER_SIZE_M) / side_px
         return Z * 1.39 # 1.39 determined experimentally
     
-    def get_degree_in_game(self, rvec, tvec, frame, ok_pnp):
+    def get_degree_and_position_in_game(self, rvec, tvec, frame, ok_pnp):
+        """Calculate both weapon position and orientation from ArUco marker"""
         point_3d = np.array([[0, 0, 0]], dtype=np.float32)  # marker center
         point_2d, _ = cv2.projectPoints(point_3d, rvec, tvec, self.K, self.dist)
 
@@ -168,7 +88,26 @@ class Estimate:
         self.d = (x / self.WIDTH * r - r / 2) * artistic
         arc_deg = x / self.WIDTH * 180 - 90
       
-        self.alpha, _ = self.viewer.update(r=0.4, d=self.d, arc_deg=arc_deg)
+        try:
+            # Get both alpha (orientation) and position from geometry viewer
+            # This now works safely from background threads
+            self.alpha, _ = self.viewer.update(r=r, d=self.d, arc_deg=arc_deg)
+        except Exception as e:
+            # If geometry viewer fails, calculate alpha manually as fallback
+            print(f"GeometryViewer error, using fallback calculation: {e}")
+            # Simple fallback calculation
+            theta_deg = 90.0 - arc_deg  # Convert arc_deg to standard angle
+            theta = math.radians(theta_deg)
+            Ex, Ey = r*math.cos(theta), r*math.sin(theta)
+            Px, Py = self.d, 0.0
+            self.alpha = math.atan2(Ey - Py, Ex - Px)  # Calculate alpha manually
+        
+        # Store the calculated values for weapon system
+        self.weapon_position_offset = self.d  # Horizontal position offset
+        self.weapon_orientation_alpha = self.alpha  # Orientation angle in radians
+        
+        # Also store the original degree for backward compatibility
+        self.in_game_deg = arc_deg + 90  # Convert back to 0-180 range
 
     def get_measurements(self, frame):
         corners, ids, _ = self.detector.detectMarkers(frame)
@@ -179,9 +118,17 @@ class Estimate:
                 c = c.reshape(-1, 2).astype(np.float32)
                 # rvec is rotation vector (stores rotation of aruco relative to cam), tvec is translation vector relative to camera
                 ok_pnp, rvec, tvec = cv2.solvePnP(self.objp, c, self.K, self.dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
-                self.get_degree_in_game(rvec, tvec, frame, ok_pnp)
+                self.get_degree_and_position_in_game(rvec, tvec, frame, ok_pnp)
                 
         return frame
+    
+    def get_weapon_transform_data(self):
+        """Return both position offset and orientation for weapon positioning"""
+        return {
+            'position_offset': self.weapon_position_offset,
+            'orientation_alpha': self.weapon_orientation_alpha,
+            'degree': getattr(self, 'in_game_deg', 90.0)  # Fallback for compatibility
+        }
 
 if __name__ == "__main__":
     estimator = Estimate()

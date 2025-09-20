@@ -4,23 +4,26 @@ import pygame
 from OpenGL.GL import *
 
 class QuaternionWeapon:
-    """Weapon system that tracks ArUco marker position using quaternions and geometry viewer math"""
+    """Weapon system that tracks ArUco marker position and orientation using geometry calculations"""
     
     def __init__(self, camera_pos=(0, 2, 5)):
         self.camera_pos = camera_pos
-        self.weapon_offset = np.array([0, -0.4, -0.8])  # Offset from camera
+        
+        # Base weapon offset from camera (will be modified by ArUco position)
+        self.base_weapon_offset = np.array([0, -0.4, -0.8])  # Base offset from camera
+        self.weapon_offset = self.base_weapon_offset.copy()  # Current actual offset
+        
         self.cursor_world_pos = np.array([0, 0, -10])  # Default target position
         
         # Quaternion for weapon rotation (identity quaternion = no rotation)
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
         
-        # ArUco marker inputs - now using both d and alpha from estimate.py
-        self.aruco_d = 0.0      # Position along diameter (-r/2 to +r/2)
-        self.aruco_alpha = 0.0  # Aiming angle in radians
-        
-        # Geometry parameters (matching geometry_viewer.py)
-        self.r = 0.4            # Circle radius (same as in estimate.py)
-        self.arc_deg = 0.0      # Arc angle (can be calculated or set)
+        # ArUco geometry data
+        self.geometry_data = {
+            'position_offset': 0.0,    # Horizontal position offset (d value)
+            'orientation_alpha': 0.0,  # Orientation angle in radians (alpha)
+            'degree': 90.0            # Original degree value for compatibility
+        }
         
         # Target distance for aiming
         self.target_distance = 20.0
@@ -29,97 +32,115 @@ class QuaternionWeapon:
         # These values are calibrated for the pistol model's actual barrel position
         self.barrel_tip_offset = np.array([0.0, 0.2, -1.0])  # Tip is forward from weapon center
         
-        # Debug counter for output throttling
+        # Position sensitivity multiplier (adjust this to control how much the weapon moves)
+        self.position_sensitivity = 5.0  # How much the weapon position changes with ArUco movement
+        
+        # Debug flag
         self._debug_counter = 0
         
-    def update_aruco_position_and_angle(self, d, alpha):
-        """Update weapon position and orientation using ArUco d and alpha values"""
-        self.aruco_d = d
-        self.aruco_alpha = alpha
+    def update_aruco_geometry(self, geometry_data):
+        """Update weapon using geometry calculations from ArUco detection"""
+        self.geometry_data = geometry_data
         
-        # Calculate weapon position based on d (position along diameter)
-        # d ranges from -r/2 to +r/2, map this to weapon horizontal offset
-        camera_pos = np.array(self.camera_pos)
+        # Update weapon position based on the 'd' value from geometry calculations
+        position_offset = geometry_data['position_offset']
         
-        # Scale d to a reasonable weapon position range
-        # d = -r/2 (left side) to d = +r/2 (right side)
-        position_scale = 3.0  # Scale factor to make position changes more visible
-        horizontal_offset = (self.aruco_d / self.r) * position_scale
+        # Apply horizontal position offset to weapon (left-right movement)
+        # The 'd' value represents horizontal displacement from center
+        self.weapon_offset = self.base_weapon_offset.copy()
+        self.weapon_offset[0] += position_offset * self.position_sensitivity  # Apply to X axis
         
-        # Update weapon offset to include horizontal movement
-        self.weapon_offset = np.array([horizontal_offset, -0.4, -0.8])
+        # Update weapon orientation based on the 'alpha' value (angle in radians)
+        orientation_alpha = geometry_data['orientation_alpha']
         
-        # Calculate target position using the geometry viewer math
-        # Following the logic from geometry_viewer.py
+        # Calculate target position based on the alpha angle
+        # The alpha angle is the angle from point P to the arc end E
+        # We need to transform this into world coordinates for aiming
         
-        # For now, we'll set arc_deg based on alpha or use a default
-        # In a full implementation, you might calculate arc_deg from other data
-        # Here we'll derive a reasonable arc angle from alpha
-        self.arc_deg = math.degrees(self.aruco_alpha) * 2.0  # Simple mapping
-        self.arc_deg = max(-90.0, min(90.0, self.arc_deg))  # Clamp to valid range
+        # Get weapon position (includes the horizontal offset)
+        weapon_world_pos = np.array(self.camera_pos) + self.weapon_offset
         
-        # Calculate arc end point E using geometry viewer logic
-        theta_deg = 90.0 - self.arc_deg  # TOP is 90°, moving CW decreases angle
-        theta = math.radians(theta_deg)
-        Ex = self.r * math.cos(theta)
-        Ey = self.r * math.sin(theta)
+        # Calculate target position using the alpha angle
+        # Alpha is angle from horizontal, so we use it to determine target direction
+        # The target should be at distance from the weapon position, not camera position
+        target_x = weapon_world_pos[0] + (math.cos(orientation_alpha) * self.target_distance)
+        target_y = weapon_world_pos[1]  # Keep at same height as weapon
+        target_z = weapon_world_pos[2] - (math.sin(orientation_alpha) * self.target_distance)
         
-        # Point P is at (d, 0) on the diameter
-        Px, Py = self.aruco_d, 0.0
+        self.cursor_world_pos = np.array([target_x, target_y, target_z])
         
-        # Calculate the direction from P to E (this gives us the aiming direction)
-        aim_direction_2d = np.array([Ex - Px, Ey - Py])
-        aim_direction_2d = aim_direction_2d / np.linalg.norm(aim_direction_2d)  # Normalize
-        
-        # Convert 2D aiming direction to 3D world coordinates
-        # Map the 2D geometry to 3D space in front of the camera
-        world_x = camera_pos[0] + horizontal_offset + (aim_direction_2d[0] * self.target_distance)
-        world_y = camera_pos[1] + (aim_direction_2d[1] * self.target_distance * 0.5)  # Scale Y for reasonable aiming
-        world_z = camera_pos[2] - self.target_distance  # Forward direction
-        
-        self.cursor_world_pos = np.array([world_x, world_y, world_z])
-        
-        # Debug output (throttled)
+        # Debug output
         self._debug_counter += 1
-        if self._debug_counter % 60 == 0:  # Every 60 frames (1 second at 60 FPS)
-            print(f"ArUco input - d: {d:.3f}, alpha: {alpha:.3f} rad ({math.degrees(alpha):.1f}°)")
-            print(f"Geometry - P: ({Px:.3f}, {Py:.3f}), E: ({Ex:.3f}, {Ey:.3f})")
-            print(f"Weapon position offset: ({horizontal_offset:.3f}, -0.4, -0.8)")
-            print(f"Target position: ({world_x:.2f}, {world_y:.2f}, {world_z:.2f})")
+        if self._debug_counter % 30 == 0:  # Print every 0.5 seconds at 60 FPS
+            print(f"Alpha: {math.degrees(orientation_alpha):.1f}°, Pos offset: {position_offset:.3f}")
+            print(f"Target: ({target_x:.1f}, {target_y:.1f}, {target_z:.1f})")
+    
+    def update_aruco_position(self, degree):
+        """Legacy method for backward compatibility - converts degree to geometry data"""
+        # Convert degree to position and orientation for compatibility
+        # This is a simplified conversion - ideally use update_aruco_geometry instead
+        
+        # Clamp degree to valid range
+        degree = max(0.0, min(180.0, degree))
+        
+        # Convert degree to horizontal angle
+        horizontal_angle_deg = (degree - 90.0)  # -90 to +90 range
+        horizontal_angle_rad = math.radians(horizontal_angle_deg)
+        
+        # Simple conversion to geometry data format
+        geometry_data = {
+            'position_offset': horizontal_angle_rad * 0.1,  # Simple mapping
+            'orientation_alpha': horizontal_angle_rad,
+            'degree': degree
+        }
+        
+        self.update_aruco_geometry(geometry_data)
     
     def calculate_weapon_orientation(self):
         """Calculate weapon orientation to point at ArUco target using quaternions"""
-        # Get weapon world position (now includes horizontal offset from d)
+        # Get weapon world position (now includes position offset from ArUco)
         weapon_pos = np.array(self.camera_pos) + self.weapon_offset
         
         # Calculate direction from weapon to target
         direction = self.cursor_world_pos - weapon_pos
-        if np.linalg.norm(direction) > 0:
-            direction = direction / np.linalg.norm(direction)  # Normalize
-        else:
-            direction = np.array([0.0, 0.0, -1.0])  # Default forward
+        direction_norm = np.linalg.norm(direction)
         
-        # Calculate quaternion to rotate weapon toward target
-        # Default weapon forward direction is (0, 0, -1)
-        forward = np.array([0.0, 0.0, -1.0])
+        if direction_norm < 0.001:  # Avoid division by zero
+            self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])
+            return
+            
+        direction = direction / direction_norm  # Normalize
+        
+        # The weapon's forward direction depends on your GLB model
+        # Common possibilities: [0,0,-1], [0,0,1], [1,0,0], [-1,0,0]
+        # Try different ones based on how your model is oriented
+        
+        # Most common for gun models pointing forward
+        forward = np.array([0.0, 0.0, -1.0])  # Z-negative is forward (most common)
+        
+        # If the gun points sideways in the model, try:
+        # forward = np.array([1.0, 0.0, 0.0])  # X-positive is forward
+        # forward = np.array([-1.0, 0.0, 0.0]) # X-negative is forward
         
         # Calculate rotation axis and angle
         cross_product = np.cross(forward, direction)
         dot_product = np.dot(forward, direction)
         
         # Handle edge cases
-        if np.allclose(cross_product, 0):
+        cross_norm = np.linalg.norm(cross_product)
+        if cross_norm < 0.001:  # Vectors are parallel
             if dot_product > 0:
-                # Same direction
+                # Same direction - no rotation needed
                 self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])
             else:
-                # Opposite direction
-                self.quaternion = np.array([0.0, 1.0, 0.0, 0.0])
+                # Opposite direction - 180 degree rotation around Y axis
+                self.quaternion = np.array([0.0, 0.0, 1.0, 0.0])
         else:
             # Calculate quaternion from axis and angle
-            axis = cross_product / np.linalg.norm(cross_product)
-            angle = math.acos(max(-1.0, min(1.0, dot_product)))
+            axis = cross_product / cross_norm
+            angle = math.acos(np.clip(dot_product, -1.0, 1.0))
             
+            # Create quaternion from axis-angle representation
             half_angle = angle / 2.0
             sin_half = math.sin(half_angle)
             cos_half = math.cos(half_angle)
@@ -130,10 +151,20 @@ class QuaternionWeapon:
                 axis[1] * sin_half,
                 axis[2] * sin_half
             ])
+            
+            # Normalize quaternion to avoid numerical drift
+            quat_norm = np.linalg.norm(self.quaternion)
+            if quat_norm > 0:
+                self.quaternion = self.quaternion / quat_norm
     
     def quaternion_to_matrix(self, q):
         """Convert quaternion to rotation matrix"""
         w, x, y, z = q
+        
+        # Ensure quaternion is normalized
+        norm = math.sqrt(w*w + x*x + y*y + z*z)
+        if norm > 0:
+            w, x, y, z = w/norm, x/norm, y/norm, z/norm
         
         # Rotation matrix from quaternion
         matrix = np.array([
@@ -147,6 +178,7 @@ class QuaternionWeapon:
     
     def get_weapon_tip_position(self):
         """Get the position of the weapon tip (barrel end) in world coordinates"""
+        # Use the current weapon offset (which includes ArUco position adjustments)
         weapon_pos = np.array(self.camera_pos) + self.weapon_offset
         
         # Apply rotation to the barrel tip offset
@@ -156,22 +188,35 @@ class QuaternionWeapon:
         # Return weapon center position + rotated tip offset
         tip_position = weapon_pos + rotated_tip_offset
         
+        # Debug output to help calibrate
+        if hasattr(self, '_debug_tip_counter'):
+            self._debug_tip_counter += 1
+        else:
+            self._debug_tip_counter = 0
+            
+        # Print debug info every 60 frames (1 second at 60 FPS)
+        if self._debug_tip_counter % 60 == 0:
+            print(f"Weapon tip position: ({tip_position[0]:.2f}, {tip_position[1]:.2f}, {tip_position[2]:.2f})")
+            print(f"Weapon center: ({weapon_pos[0]:.2f}, {weapon_pos[1]:.2f}, {weapon_pos[2]:.2f})")
+            print(f"Position offset: {self.geometry_data['position_offset']:.3f}, Alpha: {math.degrees(self.geometry_data['orientation_alpha']):.1f}°")
+        
         return tip_position
     
     def get_firing_direction(self):
         """Get the direction from weapon tip to ArUco target"""
         tip_pos = self.get_weapon_tip_position()
         direction = self.cursor_world_pos - tip_pos
-        if np.linalg.norm(direction) > 0:
-            return direction / np.linalg.norm(direction)  # Normalize
+        norm = np.linalg.norm(direction)
+        if norm > 0:
+            return direction / norm  # Normalize
         else:
-            return np.array([0.0, 0.0, -1.0])  # Default forward
+            return np.array([0, 0, -1])  # Default forward
     
     def apply_weapon_transform(self):
         """Apply the weapon transformation for rendering"""
         glPushMatrix()
         
-        # Position weapon relative to camera (now includes horizontal offset from d)
+        # Position weapon relative to camera (now includes ArUco position offset)
         weapon_world_pos = np.array(self.camera_pos) + self.weapon_offset
         glTranslatef(weapon_world_pos[0], weapon_world_pos[1], weapon_world_pos[2])
         
@@ -184,19 +229,15 @@ class QuaternionWeapon:
         
         return True  # Matrix is pushed, caller should pop
     
-    def update_with_aruco(self, d, alpha):
-        """Update weapon position and orientation based on ArUco marker d and alpha values"""
-        self.update_aruco_position_and_angle(d, alpha)
+    def update_with_aruco(self, degree):
+        """Legacy update method for backward compatibility"""
+        self.update_aruco_position(degree)
         self.calculate_weapon_orientation()
-    
-    def update_aruco_position(self, degree):
-        """Legacy method for compatibility - converts degree to d value"""
-        # Convert degree (0-180) to d value (-r/2 to +r/2)
-        degree = max(0.0, min(180.0, degree))
-        # 0° -> -r/2, 90° -> 0, 180° -> +r/2
-        d = ((degree - 90.0) / 90.0) * (self.r / 2.0)
-        alpha = 0.0  # Default alpha when using legacy degree input
-        self.update_with_aruco(d, alpha)
+        
+    def update_with_aruco_geometry(self, geometry_data):
+        """New update method using geometry calculations"""
+        self.update_aruco_geometry(geometry_data)
+        self.calculate_weapon_orientation()
     
     def update(self):
         """Update weapon orientation - can be called without parameters for compatibility"""
@@ -207,37 +248,27 @@ class QuaternionWeapon:
         """Get the current target world position for debugging"""
         return self.cursor_world_pos
     
-    def get_aruco_values(self):
-        """Get the current ArUco d and alpha values for debugging"""
-        return self.aruco_d, self.aruco_alpha
-    
     def get_aruco_degree(self):
-        """Legacy method - convert d back to degree for compatibility"""
-        # Convert d value back to degree (0-180)
-        degree = ((self.aruco_d / (self.r / 2.0)) * 90.0) + 90.0
-        return max(0.0, min(180.0, degree))
+        """Get the current ArUco degree for debugging"""
+        return self.geometry_data['degree']
+    
+    def get_geometry_data(self):
+        """Get current geometry data for debugging"""
+        return self.geometry_data.copy()
     
     def calibrate_barrel_tip_offset(self, x_offset, y_offset, z_offset):
         """Allow runtime calibration of barrel tip position"""
         self.barrel_tip_offset = np.array([x_offset, y_offset, z_offset])
         print(f"Barrel tip offset updated to: ({x_offset:.2f}, {y_offset:.2f}, {z_offset:.2f})")
-    
-    def get_geometry_debug_info(self):
-        """Get geometry information for debugging purposes"""
-        # Calculate arc end point for debugging
-        theta_deg = 90.0 - self.arc_deg
-        theta = math.radians(theta_deg)
-        Ex = self.r * math.cos(theta)
-        Ey = self.r * math.sin(theta)
-        Px, Py = self.aruco_d, 0.0
         
-        return {
-            'r': self.r,
-            'd': self.aruco_d,
-            'alpha': self.aruco_alpha,
-            'arc_deg': self.arc_deg,
-            'point_P': (Px, Py),
-            'point_E': (Ex, Ey),
-            'weapon_offset': self.weapon_offset,
-            'target_world_pos': self.cursor_world_pos
-        }
+    def calibrate_position_sensitivity(self, sensitivity):
+        """Allow runtime calibration of position sensitivity"""
+        self.position_sensitivity = max(0.1, sensitivity)
+        print(f"Position sensitivity updated to: {self.position_sensitivity:.2f}")
+        
+    def set_weapon_forward_direction(self, forward_vector):
+        """Allow setting the weapon's forward direction for different models"""
+        # This can be called if your weapon model has a different forward direction
+        # Common values: [0,0,-1], [0,0,1], [1,0,0], [-1,0,0], [0,1,0], [0,-1,0]
+        self.weapon_forward = np.array(forward_vector) / np.linalg.norm(forward_vector)
+        print(f"Weapon forward direction set to: {self.weapon_forward}")
