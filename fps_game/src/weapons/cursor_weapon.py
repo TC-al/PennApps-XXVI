@@ -4,7 +4,7 @@ import pygame
 from OpenGL.GL import *
 
 class QuaternionWeapon:
-    """Weapon system that tracks cursor position using quaternions"""
+    """Weapon system that tracks ArUco marker position using quaternions"""
     
     def __init__(self, camera_pos=(0, 2, 5)):
         self.camera_pos = camera_pos
@@ -14,45 +14,39 @@ class QuaternionWeapon:
         # Quaternion for weapon rotation (identity quaternion = no rotation)
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
         
-        # Screen dimensions for cursor calculations
-        self.screen_width = 800
-        self.screen_height = 600
+        # ArUco marker degree input (0-180)
+        self.aruco_degree = 90.0  # Default to center (90 degrees)
         
-        # FOV and aspect ratio should match the OpenGL projection
-        self.fov = 60.0  # Degrees
-        self.aspect_ratio = self.screen_width / self.screen_height
+        # Target distance for aiming
+        self.target_distance = 20.0
         
-    def update_cursor_position(self, mouse_pos):
-        """Convert mouse screen coordinates to 3D world coordinates using proper perspective projection"""
-        # Get mouse position relative to screen center
-        screen_center_x = self.screen_width / 2
-        screen_center_y = self.screen_height / 2
+    def update_aruco_position(self, degree):
+        """Convert ArUco degree (0-180) to 3D world coordinates"""
+        # Clamp degree to valid range
+        self.aruco_degree = max(0.0, min(180.0, degree))
         
-        # Convert to normalized device coordinates (-1 to 1)
-        ndc_x = (mouse_pos[0] - screen_center_x) / screen_center_x
-        ndc_y = -(mouse_pos[1] - screen_center_y) / screen_center_y  # Flip Y
+        # Convert degree to horizontal angle
+        # 0 degrees = far left, 90 degrees = center, 180 degrees = far right
+        # Map to angle range: 0° -> -90°, 90° -> 0°, 180° -> +90°
+        horizontal_angle_deg = (self.aruco_degree - 90.0)  # -90 to +90 range
+        horizontal_angle_rad = math.radians(horizontal_angle_deg)
         
-        # Convert FOV to radians and calculate tangent
-        fov_rad = math.radians(self.fov / 2.0)
-        tan_fov = math.tan(fov_rad)
-        
-        # Calculate world coordinates using proper perspective projection
-        target_distance = 20.0
+        # Calculate world coordinates based on camera position and angle
         camera_pos = np.array(self.camera_pos)
         
-        # Calculate the world coordinates based on perspective projection
-        world_x = camera_pos[0] + (ndc_x * tan_fov * self.aspect_ratio * target_distance)
-        world_y = camera_pos[1] + (ndc_y * tan_fov * target_distance)
-        world_z = camera_pos[2] - target_distance  # Forward direction (negative Z)
+        # Calculate target position at fixed distance in front of camera
+        world_x = camera_pos[0] + (math.sin(horizontal_angle_rad) * self.target_distance)
+        world_y = camera_pos[1]  # Keep at same height as camera
+        world_z = camera_pos[2] - (math.cos(horizontal_angle_rad) * self.target_distance)
         
         self.cursor_world_pos = np.array([world_x, world_y, world_z])
     
     def calculate_weapon_orientation(self):
-        """Calculate weapon orientation to point at cursor using quaternions"""
+        """Calculate weapon orientation to point at ArUco target using quaternions"""
         # Get weapon world position
         weapon_pos = np.array(self.camera_pos) + self.weapon_offset
         
-        # Calculate direction from weapon to cursor
+        # Calculate direction from weapon to target
         direction = self.cursor_world_pos - weapon_pos
         direction = direction / np.linalg.norm(direction)  # Normalize
         
@@ -116,7 +110,7 @@ class QuaternionWeapon:
         return weapon_pos + rotated_offset
     
     def get_firing_direction(self):
-        """Get the direction from weapon tip to cursor"""
+        """Get the direction from weapon tip to ArUco target"""
         tip_pos = self.get_weapon_tip_position()
         direction = self.cursor_world_pos - tip_pos
         return direction / np.linalg.norm(direction)  # Normalize
@@ -138,13 +132,20 @@ class QuaternionWeapon:
         
         return True  # Matrix is pushed, caller should pop
     
+    def update_with_aruco(self, degree):
+        """Update weapon orientation based on ArUco marker degree"""
+        self.update_aruco_position(degree)
+        self.calculate_weapon_orientation()
+    
     def update(self):
-        """Update weapon orientation based on current cursor position"""
-        # Get current mouse position
-        mouse_pos = pygame.mouse.get_pos()
-        self.update_cursor_position(mouse_pos)
+        """Update weapon orientation - can be called without parameters for compatibility"""
+        # If no ArUco input, maintain current position
         self.calculate_weapon_orientation()
         
     def get_cursor_world_position(self):
-        """Get the current cursor world position for debugging"""
+        """Get the current target world position for debugging"""
         return self.cursor_world_pos
+    
+    def get_aruco_degree(self):
+        """Get the current ArUco degree for debugging"""
+        return self.aruco_degree

@@ -2,6 +2,9 @@ import pygame
 from pygame.locals import *
 from OpenGL.GL import *
 import random
+import cv2
+import threading
+import time
 
 # Import our modules
 from src.core.camera import Camera  # Now fixed position camera
@@ -14,6 +17,7 @@ from src.core.render import Render
 from src.entities.player.health import HealthSystem
 from src.systems.collision import CollisionSystem
 from src.weapons.cursor_weapon import QuaternionWeapon  # New cursor tracking weapon
+from src.vision.estimate import Estimate  # ArUco marker detection
 
 class Game:
     def __init__(self):
@@ -22,14 +26,20 @@ class Game:
         # Set up display
         self.display = (800, 600)
         pygame.display.set_mode(self.display, DOUBLEBUF | OPENGL)
-        pygame.display.set_caption("3D Shooting Game - Cursor Aiming")
-        
-        # Keep cursor visible since we're tracking it
-        pygame.mouse.set_visible(True)
-        pygame.event.set_grab(False)  # Don't grab mouse - we need to track cursor position
+        pygame.display.set_caption("3D Shooting Game - ArUco Aiming")
         
         # Initialize OpenGL
         Render.init_opengl()
+        
+        # ArUco marker detection system
+        self.estimator = Estimate()
+        self.aruco_thread = None
+        self.aruco_running = False
+        self.current_degree = 90.0  # Default to center position
+        self.aruco_lock = threading.Lock()
+        
+        # Start ArUco detection in separate thread
+        self.start_aruco_detection()
         
         # Game objects
         self.camera = Camera()  # Fixed position camera
@@ -43,6 +53,65 @@ class Game:
         self.running = True
         
         self.print_instructions()
+    
+    def start_aruco_detection(self):
+        """Start ArUco marker detection in a separate thread"""
+        self.aruco_running = True
+        self.aruco_thread = threading.Thread(target=self.aruco_detection_loop, daemon=True)
+        self.aruco_thread.start()
+        print("ArUco detection started...")
+    
+    def aruco_detection_loop(self):
+        """ArUco detection loop running in separate thread"""
+        try:
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                print("Warning: Could not open camera for ArUco detection")
+                return
+                
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            
+            print("ArUco camera initialized successfully")
+            
+            while self.aruco_running:
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                
+                frame = cv2.flip(frame, 1)
+                frame = cv2.convertScaleAbs(frame, alpha=1.2, beta=20)
+                
+                # Process frame for ArUco markers
+                frame = self.estimator.get_measurements(frame)
+                
+                # Update degree value thread-safely
+                with self.aruco_lock:
+                    self.current_degree = self.estimator.in_game_deg
+                
+                # Show ArUco detection window (optional - can be disabled for production)
+                cv2.imshow("ArUco Detection", frame)
+                
+                # Break if 'q' is pressed in the ArUco window
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                
+                time.sleep(0.016)  # ~60 FPS
+                
+        except Exception as e:
+            print(f"ArUco detection error: {e}")
+        finally:
+            if 'cap' in locals():
+                cap.release()
+            cv2.destroyAllWindows()
+            print("ArUco detection stopped")
+    
+    def stop_aruco_detection(self):
+        """Stop ArUco detection thread"""
+        self.aruco_running = False
+        if self.aruco_thread and self.aruco_thread.is_alive():
+            self.aruco_thread.join(timeout=1.0)
     
     def create_enemies(self):
         """Create initial enemy cylinders in front of the camera"""
@@ -69,15 +138,17 @@ class Game:
     
     def print_instructions(self):
         print("Controls:")
-        print("Mouse - Aim weapon (cursor tracking)")
+        print("ArUco Marker - Aim weapon (0-180 degrees)")
         print("Left Click - Shoot")
         print("R - Reload weapon (manual)")
         print("ESC - Exit")
+        print("Q - Close ArUco detection window")
         print(f"Survive! Destroy all {len(self.enemies)} AI enemies!")
         print("Watch out - they're coming for you!")
         print("Health: 100/100 - Don't let enemies touch you!")
         print(f"Ammo: {self.weapon_system.max_ammo} rounds per magazine")
-        print("NEW: The weapon smoothly transitions to center during reload!")
+        print("NEW: Use ArUco marker to aim your weapon!")
+        print("0° = far left, 90° = center, 180° = far right")
         print("Watch the beige arm perform the reload animation!")
     
     def handle_events(self):
@@ -94,9 +165,12 @@ class Game:
                         print("Manual reload started! Watch the weapon transition and arm animation!")
                     else:
                         print("Cannot reload now (already full or already reloading)")
+                elif event.key == pygame.K_q:
+                    # Close ArUco window
+                    cv2.destroyWindow("ArUco Detection")
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left mouse button
-                    # Use cursor tracking weapon for shooting
+                    # Use ArUco-controlled weapon for shooting
                     shoot_result = shoot(self.camera, self.enemies, self.weapon_system, self.quaternion_weapon)
                     if not shoot_result:
                         # Shooting failed - could be reloading, no ammo, or fire rate
@@ -116,9 +190,14 @@ class Game:
         # Update weapon system
         self.weapon_system.update()
         
-        # Update quaternion weapon to track cursor (but only when not transitioning during reload)
+        # Update quaternion weapon with ArUco data (but only when not transitioning during reload)
         if not self.weapon_system.is_reloading:
-            self.quaternion_weapon.update()
+            # Get current ArUco degree thread-safely
+            with self.aruco_lock:
+                current_aruco_degree = self.current_degree
+            
+            # Update weapon orientation based on ArUco marker
+            self.quaternion_weapon.update_with_aruco(current_aruco_degree)
             
         # Get player position for collision detection (camera position since camera is fixed)
         player_pos = [self.camera.x, self.camera.y, self.camera.z]
@@ -161,18 +240,18 @@ class Game:
         draw_skybox()
         draw_ground()
         
-        # Draw cursor target for visualization (optional - can be removed)
+        # Draw cursor target for visualization (shows where ArUco is pointing)
         draw_cursor_target(self.quaternion_weapon)
         
-        # Draw weapon using cursor tracking with reload transitions
+        # Draw weapon using ArUco tracking with reload transitions
         draw_weapon_model(self.quaternion_weapon, self.weapon_system)
         
         # Draw enemies
         for enemy in self.enemies:
             enemy.draw()
         
-        # Draw UI (crosshair is now removed)
-        draw_crosshair()  # This is now empty
+        # Draw UI
+        draw_crosshair()  # This might be empty or show ArUco status
         draw_health_bar(self.health_system.get_health_percentage())
         draw_ammo_display(self.weapon_system)
         
@@ -180,11 +259,15 @@ class Game:
     
     def run(self):
         """Main game loop"""
-        while self.running:
-            self.handle_events()
-            self.update()
-            self.render()
-            self.clock.tick(60)
+        try:
+            while self.running:
+                self.handle_events()
+                self.update()
+                self.render()
+                self.clock.tick(60)
+        finally:
+            # Clean up ArUco detection
+            self.stop_aruco_detection()
         
         pygame.quit()
 
