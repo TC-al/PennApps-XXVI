@@ -63,7 +63,13 @@ class Game:
     
     def aruco_detection_loop(self):
         """ArUco detection loop running in separate thread"""
+        cap = None
         try:
+            # Test if estimator is properly initialized
+            if not hasattr(self.estimator, 'K') or not hasattr(self.estimator, 'dist'):
+                print("Error: ArUco estimator not properly initialized")
+                return
+                
             cap = cv2.VideoCapture(0)
             if not cap.isOpened():
                 print("Warning: Could not open camera for ArUco detection")
@@ -73,36 +79,46 @@ class Game:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             
             print("ArUco camera initialized successfully")
+            print("Camera matrix shape:", self.estimator.K.shape)
+            print("Distortion coefficients shape:", self.estimator.dist.shape)
             
             while self.aruco_running:
                 ret, frame = cap.read()
                 if not ret:
+                    print("Failed to read frame from camera")
                     continue
                 
-                frame = cv2.flip(frame, 1)
-                frame = cv2.convertScaleAbs(frame, alpha=1.2, beta=20)
-                
-                # Process frame for ArUco markers
-                frame = self.estimator.get_measurements(frame)
-                
-                # Update degree value thread-safely
-                with self.aruco_lock:
-                    self.current_degree = self.estimator.in_game_deg
-                
-                # Show ArUco detection window (optional - can be disabled for production)
-                cv2.imshow("ArUco Detection", frame)
-                
-                # Break if 'q' is pressed in the ArUco window
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
+                try:
+                    frame = cv2.flip(frame, 1)
+                    frame = cv2.convertScaleAbs(frame, alpha=1.2, beta=20)
+                    
+                    # Process frame for ArUco markers
+                    frame = self.estimator.get_measurements(frame)
+                    
+                    # Update degree value thread-safely
+                    with self.aruco_lock:
+                        self.current_degree = self.estimator.in_game_deg
+                    
+                    # Show ArUco detection window (optional - can be disabled for production)
+                    cv2.imshow("ArUco Detection", frame)
+                    
+                    # Break if 'q' is pressed in the ArUco window
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        break
+                        
+                except Exception as frame_error:
+                    print(f"Error processing frame: {frame_error}")
+                    continue
                 
                 time.sleep(0.016)  # ~60 FPS
                 
         except Exception as e:
             print(f"ArUco detection error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
-            if 'cap' in locals():
+            if cap is not None:
                 cap.release()
             cv2.destroyAllWindows()
             print("ArUco detection stopped")

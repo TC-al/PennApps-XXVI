@@ -11,6 +11,9 @@ class Estimate:
     HEIGHT = 720
     
     def __init__(self):
+        # Initialize distortion coefficients first
+        self.dist = np.array([0, 0, 0, 0, 0], dtype=np.float64)
+        
         # Camera intrinsics 
         try:
             calib_path = os.path.join(os.getcwd(), "calib.json")  # Fixed path join
@@ -19,9 +22,15 @@ class Estimate:
             self.K = np.array([[self.data["fx"], 0, self.data["cx"]],
                         [0, self.data["fy"], self.data["cy"]],
                         [0,  0,  1]], dtype=np.float64)
+            print("Loaded camera calibration from calib.json")
         except FileNotFoundError:
             print("Warning: calib.json not found, using default camera matrix")
             # Default camera matrix for 1280x720
+            self.K = np.array([[800.0, 0, 640.0],
+                        [0, 800.0, 360.0],
+                        [0,  0,  1]], dtype=np.float64)
+        except Exception as e:
+            print(f"Error loading calibration: {e}, using default camera matrix")
             self.K = np.array([[800.0, 0, 640.0],
                         [0, 800.0, 360.0],
                         [0,  0,  1]], dtype=np.float64)
@@ -40,7 +49,7 @@ class Estimate:
         ], dtype=np.float32)
         
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        self.in_game_deg = 0
+        self.in_game_deg = 90.0  # Default to center position
 
     def draw_semi_gauge(
         self,
@@ -140,8 +149,13 @@ class Estimate:
         cv2.circle(frame, (int(x), int(y)), 20, (0, 0, 255), 10)
         
         # Get ratio of x pos / total width, convert to a degree by doing ratio * 180
-        self.in_game_deg = x / self.WIDTH * 180 - 90
-        self.draw_semi_gauge(frame, value_deg=self.in_game_deg)
+        # Clamp x position to screen bounds to avoid invalid degrees
+        x_clamped = max(0, min(self.WIDTH, x))
+        self.in_game_deg = (x_clamped / self.WIDTH) * 180
+        
+        # Convert to range for gauge display (-90 to +90)
+        gauge_deg = self.in_game_deg - 90
+        self.draw_semi_gauge(frame, value_deg=gauge_deg)
         
     def get_measurements(self, frame):
         corners, ids, _ = self.detector.detectMarkers(frame)
@@ -153,7 +167,12 @@ class Estimate:
                 c = c.reshape(-1, 2).astype(np.float32)
                 # rvec is rotation vector (stores rotation of aruco relative to cam), tvec is translation vector relative to camera
                 ok_pnp, rvec, tvec = cv2.solvePnP(self.objp, c, self.K, self.dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
-                self.get_degree_in_game(rvec, tvec, frame)
+                if ok_pnp:  # Only process if pose estimation was successful
+                    self.get_degree_in_game(rvec, tvec, frame)
+        else:
+            # No markers detected, maintain current position and draw gauge
+            gauge_deg = self.in_game_deg - 90
+            self.draw_semi_gauge(frame, value_deg=gauge_deg)
                 
         return frame
 
@@ -180,4 +199,3 @@ if __name__ == "__main__":
 
     cap.release()
     cv2.destroyAllWindows()
-

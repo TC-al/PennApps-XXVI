@@ -8,7 +8,7 @@ class QuaternionWeapon:
     
     def __init__(self, camera_pos=(0, 2, 5)):
         self.camera_pos = camera_pos
-        self.weapon_offset = np.array([0.3, -0.4, -0.8])  # Offset from camera
+        self.weapon_offset = np.array([0, -0.4, -0.8])  # Offset from camera
         self.cursor_world_pos = np.array([0, 0, -10])  # Default target position
         
         # Quaternion for weapon rotation (identity quaternion = no rotation)
