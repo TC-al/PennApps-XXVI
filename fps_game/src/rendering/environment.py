@@ -74,13 +74,13 @@ def draw_weapon_model(quaternion_weapon):
     # Apply weapon transformation (this pushes matrix)
     if quaternion_weapon.apply_weapon_transform():
         
-        # Much smaller scale for reasonable weapon size
-        weapon_scale = 100.0
+        # Reduced scale for smaller weapon size
+        weapon_scale = 50.0  # Reduced from 100.0
         
         # Render the pistol model at origin (transformation already applied)
-        # Adjusted rotation to fix sideways orientation
+        # Adjusted rotation and centering
         render_pistol(
-            position=(0, 0, 0),
+            position=(0, 0, 0),  # Centered at origin since transform is already applied
             rotation=(-90, 0, 90),  # Fixed orientation: pitch -90, yaw 0, roll 90
             scale=weapon_scale
         )

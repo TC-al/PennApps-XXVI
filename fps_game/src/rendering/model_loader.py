@@ -139,7 +139,7 @@ class GLTFLoader:
         return {'primitives': primitives} if primitives else None
     
     def _get_accessor_data_pygltflib(self, gltf, accessor_index):
-        """Extract data using pygltflib accessor - simplified approach"""
+        """Extract data using pygltflib accessor - comprehensive approach"""
         try:
             print(f"    Getting accessor data for index {accessor_index}")
             
@@ -158,12 +158,52 @@ class GLTFLoader:
             
             print(f"    Accessor: count={accessor.count}, componentType={accessor.componentType}, type={accessor.type}")
             
-            # Simple approach - just use buffer.data like the working version
+            # Try multiple ways to get buffer data
+            buffer_data = None
+            
+            # Method 1: Direct buffer.data access
             if hasattr(buffer, 'data') and buffer.data:
                 buffer_data = buffer.data
                 print(f"    Got buffer data from buffer.data ({len(buffer_data)} bytes)")
-            else:
-                print("    ERROR: Cannot access buffer.data")
+            
+            # Method 2: Try to get from GLTF binary blob
+            elif hasattr(gltf, 'binary_blob') and gltf.binary_blob:
+                # Check if it's callable (method) or data
+                if callable(gltf.binary_blob):
+                    try:
+                        buffer_data = gltf.binary_blob()
+                        print(f"    Got buffer data from gltf.binary_blob() method ({len(buffer_data)} bytes)")
+                    except:
+                        print("    binary_blob method failed")
+                else:
+                    buffer_data = gltf.binary_blob
+                    print(f"    Got buffer data from gltf.binary_blob attribute ({len(buffer_data)} bytes)")
+            
+            # Method 3: Try buffer.uri handling
+            elif buffer.uri:
+                if buffer.uri.startswith('data:'):
+                    # Data URI
+                    import base64
+                    header, data = buffer.uri.split(',', 1)
+                    buffer_data = base64.b64decode(data)
+                    print(f"    Got buffer data from data URI ({len(buffer_data)} bytes)")
+                else:
+                    # External file
+                    buffer_path = os.path.join(os.path.dirname(gltf.filename), buffer.uri)
+                    with open(buffer_path, 'rb') as f:
+                        buffer_data = f.read()
+                    print(f"    Got buffer data from external file ({len(buffer_data)} bytes)")
+            
+            # Method 4: Try accessing GLB file directly
+            elif hasattr(gltf, 'filename') and gltf.filename:
+                buffer_data = self._extract_glb_binary_data(gltf.filename)
+                if buffer_data:
+                    print(f"    Got buffer data by parsing GLB directly ({len(buffer_data)} bytes)")
+            
+            if buffer_data is None:
+                print("    ERROR: Could not access buffer data through any method")
+                print(f"    Buffer attributes: {[attr for attr in dir(buffer) if not attr.startswith('_')]}")
+                print(f"    GLTF attributes: {[attr for attr in dir(gltf) if not attr.startswith('_')]}")
                 return None
             
             # Calculate offsets
@@ -230,6 +270,41 @@ class GLTFLoader:
             print(f"    ERROR extracting accessor data with pygltflib: {e}")
             import traceback
             traceback.print_exc()
+            return None
+    
+    def _extract_glb_binary_data(self, filepath):
+        """Manually extract binary data from GLB file as fallback"""
+        try:
+            with open(filepath, 'rb') as f:
+                # Read GLB header
+                magic = f.read(4)
+                if magic != b'glTF':
+                    return None
+                
+                version = struct.unpack('<I', f.read(4))[0]
+                length = struct.unpack('<I', f.read(4))[0]
+                
+                # Read JSON chunk header
+                json_chunk_length = struct.unpack('<I', f.read(4))[0]
+                json_chunk_type = f.read(4)
+                
+                # Skip JSON data
+                f.seek(json_chunk_length, 1)
+                
+                # Check if there's a binary chunk
+                if f.tell() < length:
+                    # Read binary chunk header
+                    bin_chunk_length = struct.unpack('<I', f.read(4))[0]
+                    bin_chunk_type = f.read(4)
+                    
+                    if bin_chunk_type == b'BIN\x00':
+                        # Read binary data
+                        binary_data = f.read(bin_chunk_length)
+                        return binary_data
+                
+                return None
+        except Exception as e:
+            print(f"    Error reading GLB binary data manually: {e}")
             return None
     
     def render_model(self, model_data, scale=1.0, position=(0, 0, 0), rotation=(0, 0, 0)):
