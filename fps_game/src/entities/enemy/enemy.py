@@ -11,7 +11,7 @@ class Enemy(EnemyBase):
     
     def update(self, player_pos):
         """Update enemy AI - move towards player"""
-        #EnemyAI.update_movement(self, player_pos)
+        EnemyAI.update_movement(self, player_pos)
     
     def draw(self):
         """Draw enemy as a cylinder with health bar above"""

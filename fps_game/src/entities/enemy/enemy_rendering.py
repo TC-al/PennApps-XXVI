@@ -35,6 +35,7 @@ class EnemyRenderer:
     @staticmethod
     def _draw_cylinder(radius, height, segments=12):
         """Draw a cylinder with the given radius and height"""
+        glColor3f(1.0, 1.0, 1.0)
         half_height = height / 2.0
         
         # Draw cylinder sides

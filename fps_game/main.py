@@ -146,7 +146,7 @@ class Game:
     def create_enemies(self):
         """Create initial enemy cylinders in front of the camera"""
         enemies = []
-        for i in range(8):
+        for i in range(4):
             # Spawn enemies only in front of camera (negative Z direction)
             # Camera is at (0, 2, 5) looking toward negative Z
             distance = random.uniform(15, 25)

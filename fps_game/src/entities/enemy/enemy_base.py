@@ -2,7 +2,7 @@ import math
 import random
 
 class EnemyBase:
-    """Base enemy class containing core properties and basic functionality"""
+    """Base enemy class with core properties"""
     
     def __init__(self, x, y, z, height=3.0, radius=0.8):
         self.x = x
@@ -10,11 +10,11 @@ class EnemyBase:
         self.z = z
         self.height = height
         self.radius = radius
-        self.speed = 0.02  # Movement speed towards player
+        self.speed = 0.02
         self.alive = True
         
-        # Health system for individual enemies
-        self.max_health = random.randint(30, 80)  # Randomized health between 30-80
+        # Health system
+        self.max_health = random.randint(30, 80)
         self.current_health = self.max_health
         
     def take_damage(self, damage=25):
@@ -32,13 +32,9 @@ class EnemyBase:
         return False
     
     def get_health_percentage(self):
-        """Get health as percentage for health bar display"""
+        """Get health as percentage"""
         return self.current_health / self.max_health if self.max_health > 0 else 0
     
-    def destroy(self):
-        """Mark enemy as destroyed (kept for compatibility)"""
-        self.alive = False
-        
     def get_position(self):
         """Get enemy position as tuple"""
         return (self.x, self.y, self.z)
