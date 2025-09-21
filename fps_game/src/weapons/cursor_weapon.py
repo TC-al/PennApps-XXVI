@@ -10,7 +10,7 @@ class QuaternionWeapon:
         self.camera_pos = camera_pos
         
         # Base weapon offset from camera (will be modified by ArUco position)
-        self.base_weapon_offset = np.array([0, -0.4, -0.8])  # Base offset from camera
+        self.base_weapon_offset = np.array([0, -0.4, -2.0])  # Base offset from camera
         self.weapon_offset = self.base_weapon_offset.copy()  # Current actual offset
         
         self.cursor_world_pos = np.array([0, 0, -10])  # Default target position
@@ -18,13 +18,22 @@ class QuaternionWeapon:
         # Quaternion for weapon rotation (identity quaternion = no rotation)
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
         
+        # Separate yaw and roll quaternions
+        self.yaw_quaternion = np.array([1.0, 0.0, 0.0, 0.0])    # Rotation around Y-axis
+        self.roll_quaternion = np.array([1.0, 0.0, 0.0, 0.0])   # Rotation around Z-axis
+        
+        # Separate yaw and roll angles (in radians)
+        self.yaw_angle = 0.0    # Left/right rotation
+        self.roll_angle = 0.0   # Roll rotation around forward axis
+        
         # ArUco geometry data
         self.geometry_data = {
             'position_offset': 0.0,    # Horizontal position offset (d value)
-            'orientation_alpha': 0.0,  # Orientation angle in radians (alpha)
+            'orientation_alpha': 0.0,  # Orientation angle in radians (alpha) - primarily yaw
             'degree': 90.0,           # Original degree value for compatibility
-            'rotation_angle': 0.0,    # Left/right rotation of gun
-            'distance_to_cam': 1.5    # Distance from camera (default 1.5m)
+            'rotation_angle': 0.0,    # Additional rotation angle - now contributes to roll
+            'distance_to_cam': 1.5,   # Distance from camera (default 1.5m)
+            'roll_offset': 0.0        # Roll offset (replaces pitch_offset)
         }
         
         # Default distance for when ArUco marker not visible
@@ -45,6 +54,9 @@ class QuaternionWeapon:
         # Rotation sensitivity for left/right gun rotation
         self.rotation_sensitivity = 1.0
         
+        # Roll sensitivity (replaces pitch sensitivity)
+        self.roll_sensitivity = 1.0
+        
         # Debug flag
         self._debug_counter = 0
         
@@ -56,8 +68,9 @@ class QuaternionWeapon:
         # Get values with defaults
         position_offset = full_data.get('position_offset', 0.0)
         orientation_alpha = full_data.get('orientation_alpha', 0.0)
-        rotation_angle = -full_data.get('rotation_angle', 0.0)  # Invert the angle
+        rotation_angle = full_data.get('rotation_angle', 0.0)
         distance_to_cam = full_data.get('distance_to_cam', self.default_distance_to_cam)
+        roll_offset = full_data.get('roll_offset', 0.0)  # Get roll if provided
         
         # If distance is 0 (marker not visible), use default
         if distance_to_cam <= 0.01:
@@ -70,34 +83,36 @@ class QuaternionWeapon:
         self.weapon_offset[0] += position_offset * self.position_sensitivity
         
         # Apply distance-based Z offset (forward-back movement)
-        # Closer to camera = move weapon forward (more negative Z)
-        # Further from camera = move weapon backward (less negative Z)
         distance_offset = (distance_to_cam - self.default_distance_to_cam) * self.distance_sensitivity
-        self.weapon_offset[2] -= distance_offset  # Negative because forward is -Z
+        self.weapon_offset[2] += (distance_offset * 10) + 3
         
-        # Calculate target position based on alpha angle and rotation
+        # Calculate separate yaw and roll angles
+        # Yaw: horizontal rotation (left-right aiming)
+        self.yaw_angle = orientation_alpha
+        
+        # Roll: rotation around the forward axis (weapon twist)
+        # Combine rotation_angle and roll_offset for roll control
+        self.roll_angle = -(math.radians(rotation_angle) + roll_offset) * self.roll_sensitivity
+        
+        # Calculate target position using yaw only (no pitch, weapon aims horizontally)
         weapon_world_pos = np.array(self.camera_pos) + self.weapon_offset
         
-        # Apply rotation angle to target calculation
-        # Combine orientation_alpha with rotation_angle for full aiming
-        combined_angle = orientation_alpha + math.radians(rotation_angle * self.rotation_sensitivity)
-        
-        target_x = weapon_world_pos[0] + (math.cos(combined_angle) * self.target_distance)
-        target_y = weapon_world_pos[1]  # Keep at same height as weapon
-        target_z = weapon_world_pos[2] - (math.sin(combined_angle) * self.target_distance)
+        # Apply yaw to calculate horizontal target position
+        target_x = weapon_world_pos[0] + (math.cos(self.yaw_angle) * self.target_distance)
+        target_y = weapon_world_pos[1]  # Same height as weapon
+        target_z = weapon_world_pos[2] - (math.sin(self.yaw_angle) * self.target_distance)
         
         self.cursor_world_pos = np.array([target_x, target_y, target_z])
         
         # Debug output
         self._debug_counter += 1
         if self._debug_counter % 30 == 0:  # Print every 0.5 seconds at 60 FPS
-            print(f"Alpha: {math.degrees(orientation_alpha):.1f}°, Rotation: {rotation_angle:.1f}°")
+            print(f"Yaw: {math.degrees(self.yaw_angle):.1f}°, Roll: {math.degrees(self.roll_angle):.1f}°")
             print(f"Distance: {distance_to_cam:.2f}m, Pos offset: {position_offset:.3f}")
             print(f"Target: ({target_x:.1f}, {target_y:.1f}, {target_z:.1f})")
     
     def update_aruco_geometry(self, geometry_data):
         """Update weapon using geometry calculations from ArUco detection"""
-        # Use the new full update method
         self.update_full_aruco_data(geometry_data)
     
     def update_aruco_position(self, degree):
@@ -111,13 +126,14 @@ class QuaternionWeapon:
             'orientation_alpha': horizontal_angle_rad,
             'degree': degree,
             'rotation_angle': 0.0,
-            'distance_to_cam': self.default_distance_to_cam
+            'distance_to_cam': self.default_distance_to_cam,
+            'roll_offset': 0.0
         }
         
         self.update_full_aruco_data(geometry_data)
     
     def calculate_weapon_orientation(self):
-        """Calculate weapon orientation to point at ArUco target using quaternions"""
+        """Calculate weapon orientation using separate yaw and roll quaternions"""
         weapon_pos = np.array(self.camera_pos) + self.weapon_offset
         
         direction = self.cursor_world_pos - weapon_pos
@@ -125,61 +141,51 @@ class QuaternionWeapon:
         
         if direction_norm < 0.001:
             self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])
+            self.yaw_quaternion = np.array([1.0, 0.0, 0.0, 0.0])
+            self.roll_quaternion = np.array([1.0, 0.0, 0.0, 0.0])
             return
             
         direction = direction / direction_norm
         
-        forward = np.array([0.0, 0.0, -1.0])  # Z-negative is forward
+        # Calculate yaw (rotation around Y-axis)
+        # Project direction onto XZ plane
+        xz_direction = np.array([direction[0], 0, direction[2]])
+        xz_norm = np.linalg.norm(xz_direction)
         
-        # Include rotation angle in the quaternion calculation
-        rotation_angle = self.geometry_data.get('rotation_angle', 0.0)
-        
-        # Calculate rotation axis and angle
-        cross_product = np.cross(forward, direction)
-        dot_product = np.dot(forward, direction)
-        
-        cross_norm = np.linalg.norm(cross_product)
-        if cross_norm < 0.001:  # Vectors are parallel
-            if dot_product > 0:
-                self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])
-            else:
-                self.quaternion = np.array([0.0, 0.0, 1.0, 0.0])
-        else:
-            axis = cross_product / cross_norm
-            angle = math.acos(np.clip(dot_product, -1.0, 1.0))
+        if xz_norm > 0.001:
+            xz_direction = xz_direction / xz_norm
+            # Calculate yaw angle from forward vector [0, 0, -1]
+            yaw = math.atan2(-xz_direction[0], -xz_direction[2])
             
-            # Add Z-axis rotation for left-right gun rotation
-            # This creates a combined rotation
-            half_angle = angle / 2.0
-            sin_half = math.sin(half_angle)
-            cos_half = math.cos(half_angle)
-            
-            base_quat = np.array([
-                cos_half,
-                axis[0] * sin_half,
-                axis[1] * sin_half,
-                axis[2] * sin_half
+            # Create yaw quaternion (rotation around Y-axis)
+            half_yaw = yaw / 2.0
+            self.yaw_quaternion = np.array([
+                math.cos(half_yaw),
+                0.0,
+                math.sin(half_yaw),
+                0.0
             ])
-            
-            # Apply additional Z-axis rotation for gun twist
-            if abs(rotation_angle) > 0.01:
-                twist_angle = math.radians(rotation_angle * self.rotation_sensitivity)
-                half_twist = twist_angle / 2.0
-                twist_quat = np.array([
-                    math.cos(half_twist),
-                    0.0,
-                    0.0,
-                    math.sin(half_twist)
-                ])
-                # Multiply quaternions to combine rotations
-                self.quaternion = self.multiply_quaternions(base_quat, twist_quat)
-            else:
-                self.quaternion = base_quat
-            
-            # Normalize quaternion
-            quat_norm = np.linalg.norm(self.quaternion)
-            if quat_norm > 0:
-                self.quaternion = self.quaternion / quat_norm
+        else:
+            self.yaw_quaternion = np.array([1.0, 0.0, 0.0, 0.0])
+        
+        # Create roll quaternion (rotation around Z-axis)
+        # Roll rotates the weapon around its forward-facing axis
+        half_roll = self.roll_angle / 2.0
+        self.roll_quaternion = np.array([
+            math.cos(half_roll),
+            0.0,
+            0.0,
+            math.sin(half_roll)
+        ])
+        
+        # Combine quaternions: first yaw, then roll
+        # Order matters! We apply yaw first, then roll around the new forward axis
+        self.quaternion = self.multiply_quaternions(self.yaw_quaternion, self.roll_quaternion)
+        
+        # Normalize final quaternion
+        quat_norm = np.linalg.norm(self.quaternion)
+        if quat_norm > 0:
+            self.quaternion = self.quaternion / quat_norm
     
     def multiply_quaternions(self, q1, q2):
         """Multiply two quaternions q1 * q2"""
@@ -226,7 +232,7 @@ class QuaternionWeapon:
             
         if self._debug_tip_counter % 60 == 0:
             print(f"Weapon tip position: ({tip_position[0]:.2f}, {tip_position[1]:.2f}, {tip_position[2]:.2f})")
-            print(f"Distance to cam: {self.geometry_data.get('distance_to_cam', self.default_distance_to_cam):.2f}m")
+            print(f"Yaw: {math.degrees(self.yaw_angle):.1f}°, Roll: {math.degrees(self.roll_angle):.1f}°")
         
         return tip_position
     
@@ -279,6 +285,23 @@ class QuaternionWeapon:
         """Get current geometry data for debugging"""
         return self.geometry_data.copy()
     
+    def get_yaw_roll_angles(self):
+        """Get current yaw and roll angles in degrees"""
+        return {
+            'yaw': math.degrees(self.yaw_angle),
+            'roll': math.degrees(self.roll_angle)
+        }
+    
+    def set_yaw_angle(self, yaw_degrees):
+        """Manually set yaw angle (in degrees)"""
+        self.yaw_angle = math.radians(yaw_degrees)
+        print(f"Yaw angle set to: {yaw_degrees:.1f}°")
+    
+    def set_roll_angle(self, roll_degrees):
+        """Manually set roll angle (in degrees)"""
+        self.roll_angle = math.radians(roll_degrees)
+        print(f"Roll angle set to: {roll_degrees:.1f}°")
+    
     def calibrate_barrel_tip_offset(self, x_offset, y_offset, z_offset):
         """Allow runtime calibration of barrel tip position"""
         self.barrel_tip_offset = np.array([x_offset, y_offset, z_offset])
@@ -293,6 +316,11 @@ class QuaternionWeapon:
         """Allow runtime calibration of distance sensitivity"""
         self.distance_sensitivity = max(0.01, sensitivity)
         print(f"Distance sensitivity updated to: {self.distance_sensitivity:.2f}")
+    
+    def calibrate_roll_sensitivity(self, sensitivity):
+        """Allow runtime calibration of roll sensitivity"""
+        self.roll_sensitivity = max(0.1, sensitivity)
+        print(f"Roll sensitivity updated to: {self.roll_sensitivity:.2f}")
         
     def set_weapon_forward_direction(self, forward_vector):
         """Allow setting the weapon's forward direction for different models"""
