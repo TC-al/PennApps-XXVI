@@ -56,7 +56,7 @@ class QuaternionWeapon:
         # Get values with defaults
         position_offset = full_data.get('position_offset', 0.0)
         orientation_alpha = full_data.get('orientation_alpha', 0.0)
-        rotation_angle = full_data.get('rotation_angle', 0.0)
+        rotation_angle = -full_data.get('rotation_angle', 0.0)  # Invert the angle
         distance_to_cam = full_data.get('distance_to_cam', self.default_distance_to_cam)
         
         # If distance is 0 (marker not visible), use default
