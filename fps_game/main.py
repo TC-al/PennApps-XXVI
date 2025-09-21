@@ -59,6 +59,12 @@ class Game:
         # Start ArUco detection in separate thread
         self.start_aruco_detection()
         
+        # Enemy management (define before creating enemies)
+        self.max_enemies = 4  # Maximum number of enemies on screen
+        self.enemies_killed = 0  # Track total enemies killed
+        self.spawn_delay = 1.0  # Delay before spawning new enemy (seconds)
+        self.last_spawn_time = 0  # Track when last enemy was spawned
+        
         # Game objects
         self.camera = Camera()  # Fixed position camera
         self.quaternion_weapon = QuaternionWeapon(self.camera.get_position())
@@ -177,29 +183,50 @@ class Game:
     def create_enemies(self):
         """Create initial enemy cylinders in front of the camera"""
         enemies = []
-        for i in range(4):
-            # Spawn enemies only in front of camera (negative Z direction)
-            # Camera is at (0, 2, 5) looking toward negative Z
-            distance = random.uniform(15, 25)
-            spread = 10.0  # How wide the spawn area is
-            
-            x = random.uniform(-spread, spread)  # Left to right spread
-            z = -distance + random.uniform(-5, 5)  # In front, with some depth variation
-            y = 1.5  # Half the height so they sit on the ground
-            
-            # Vary the enemy sizes slightly
-            height = random.uniform(2.5, 3.5)
-            radius = random.uniform(0.6, 1.0)
-            
-            enemy = Enemy(x, y, z, height, radius)
+        for i in range(self.max_enemies):
+            enemy = self.spawn_new_enemy()
             enemies.append(enemy)
             print(f"Enemy {i+1} spawned with {enemy.max_health} HP")
         
         return enemies
     
+    def spawn_new_enemy(self):
+        """Spawn a new enemy at a random location in front of the camera"""
+        # Spawn enemies only in front of camera (negative Z direction)
+        # Camera is at (0, 2, 5) looking toward negative Z
+        distance = random.uniform(15, 25)
+        spread = 10.0  # How wide the spawn area is
+        
+        x = random.uniform(-spread, spread)  # Left to right spread
+        z = -distance + random.uniform(-5, 5)  # In front, with some depth variation
+        y = 1.5  # Half the height so they sit on the ground
+        
+        # Vary the enemy sizes slightly
+        height = random.uniform(2.5, 3.5)
+        radius = random.uniform(0.6, 1.0)
+        
+        return Enemy(x, y, z, height, radius)
+    
+    def manage_enemy_spawning(self):
+        """Check if we need to spawn new enemies to replace dead ones"""
+        current_time = time.time()
+        alive_enemies = len([enemy for enemy in self.enemies if enemy.alive])
+        
+        # If we have fewer enemies than the maximum and enough time has passed
+        if (alive_enemies < self.max_enemies and 
+            current_time - self.last_spawn_time >= self.spawn_delay):
+            
+            # Spawn a new enemy
+            new_enemy = self.spawn_new_enemy()
+            self.enemies.append(new_enemy)
+            self.last_spawn_time = current_time
+            
+            print(f"New enemy spawned! Total enemies killed: {self.enemies_killed}")
+            print(f"Enemy spawned with {new_enemy.max_health} HP")
+    
     def print_instructions(self):
         print("="*60)
-        print("FULL ARUCO CONTROL MODE")
+        print("FULL ARUCO CONTROL MODE - ENDLESS SURVIVAL")
         print("="*60)
         print("All weapon control through ArUco marker and camera:")
         print()
@@ -228,8 +255,8 @@ class Game:
         print("1-6 - Adjust barrel tip position")
         print("7/8 - Adjust position sensitivity")
         print()
-        print(f"Survive! Destroy all {len(self.enemies)} AI enemies!")
-        print("Watch out - they're coming for you!")
+        print("SURVIVAL MODE: Enemies respawn when killed!")
+        print("How long can you survive? Kill as many as possible!")
         print("Health: 100/100 - Don't let enemies touch you!")
         print(f"Ammo: {self.weapon_system.max_ammo} rounds per magazine")
     
@@ -366,8 +393,9 @@ class Game:
             enemy.update(player_pos)
         
         # Check for collisions with enemies
+        alive_enemies = [enemy for enemy in self.enemies if enemy.alive]
         colliding_enemies = CollisionSystem.check_multiple_collisions(
-            player_pos, self.player_radius, self.enemies
+            player_pos, self.player_radius, alive_enemies
         )
         
         # Handle collisions
@@ -375,17 +403,24 @@ class Game:
             if self.health_system.take_damage():
                 print("Enemy collision! Defend yourself!")
         
-        # Remove dead enemies from the list
+        # Count enemies that were killed this frame
+        enemies_before = len([enemy for enemy in self.enemies if enemy.alive])
+        
+        # Remove dead enemies from the list and track kills
+        dead_enemies = [enemy for enemy in self.enemies if not enemy.alive]
+        self.enemies_killed += len(dead_enemies)
+        
+        # Remove dead enemies from the active list
         self.enemies = [enemy for enemy in self.enemies if enemy.alive]
         
-        # Check win condition
-        if len(self.enemies) == 0 and self.health_system.is_alive:
-            print("Victory! All enemies defeated!")
-            print(f"Final Health: {self.health_system.current_health}/{self.health_system.max_health}")
-            print("You mastered the full ArUco control system!")
-            self.running = False
-        elif not self.health_system.is_alive:
+        # Manage enemy spawning (replace dead enemies)
+        self.manage_enemy_spawning()
+        
+        # Check game over condition (player dies)
+        if not self.health_system.is_alive:
             print("Game Over! You were overwhelmed by enemies.")
+            print(f"Final Score: {self.enemies_killed} enemies killed!")
+            print("Survival time and kill count are your measures of success!")
             self.running = False
     
     def render(self):
@@ -419,10 +454,13 @@ class Game:
         for enemy in self.enemies:
             enemy.draw()
         
-        # Draw UI
+        # Draw UI with kill counter
         draw_crosshair()
         draw_health_bar(self.health_system.get_health_percentage())
         draw_ammo_display(self.weapon_system)
+        
+        # Display kill counter (you'll need to implement this in your UI module)
+        # For now, it will be printed to console when enemies die
         
         pygame.display.flip()
     
@@ -431,6 +469,7 @@ class Game:
         try:
             print("Starting FULL ArUco control system...")
             print("Use marker movements for aiming, recoil motion for shooting, left fist for reloading!")
+            print("SURVIVAL MODE: Enemies will keep spawning - see how long you can last!")
             
             while self.running:
                 self.handle_events()
@@ -447,7 +486,7 @@ class Game:
         pygame.quit()
 
 def main():
-    print("3D Shooting Game - Full ArUco Control System")
+    print("3D Shooting Game - Full ArUco Control System - ENDLESS SURVIVAL")
     print("="*60)
     game = Game()
     game.run()
