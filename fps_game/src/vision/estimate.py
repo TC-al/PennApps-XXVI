@@ -3,22 +3,30 @@ import numpy as np
 import math
 from collections import deque
 import json
-from monitors import Viewer
+from src.vision.monitors import Viewer
 import mediapipe as mp
 
 class Estimate:
     MARKER_SIZE_M = 0.03    
-    WIDTH = 1280
-    HEIGHT = 720
+    WIDTH = 1500
+    HEIGHT = 750
     
     def __init__(self):
-        # Camera intrinsics 
-        with open("calib.json", "r") as f:
-            self.data = json.load(f)
-        self.K = np.array([[self.data["fx"], 0, self.data["cx"]],
-                    [0, self.data["fy"], self.data["cy"]],
-                    [0,  0,  1]], dtype=np.float64)
         self.dist = np.array([0, 0, 0, 0, 0], dtype=np.float64)
+        try:
+            calib_path = os.path.join(os.getcwd(), "calib.json")  # Fixed path join
+            with open(calib_path, "r") as f:
+                self.data = json.load(f)
+            self.K = np.array([[self.data["fx"], 0, self.data["cx"]],
+                        [0, self.data["fy"], self.data["cy"]],
+                        [0,  0,  1]], dtype=np.float64)
+            print("Loaded camera calibration from calib.json")
+        except FileNotFoundError:
+            print("Warning: calib.json not found, using default camera matrix")
+            # Default camera matrix for 1280x720
+            self.K = np.array([[800.0, 0, 640.0],
+                        [0, 800.0, 360.0],
+                        [0,  0,  1]], dtype=np.float64)
         
         self.aruco = cv2.aruco
         dic = self.aruco.getPredefinedDictionary(self.aruco.DICT_4X4_50)
@@ -33,12 +41,15 @@ class Estimate:
             [-half, -half, 0.0],  # BL
         ], dtype=np.float32)
    
-        self.d, self.alpha = 0, 0
-        self.d_to_cam = 0
-        self.rot_angle = 0
+        # Initialize all tracking variables
+        self.d = 0
+        self.alpha = 0
+        self.d_to_cam = 0  # Distance to camera
+        self.angle = 0  # Rotation angle for left/right gun rotation
         
+        # Reload detection
         self.reloading = False
-        self.reload_cooldown = 0 # Cannot reload consecutively 
+        self.reload_cooldown = 0  # Cannot reload consecutively 
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
@@ -60,10 +71,10 @@ class Estimate:
         R, _ = cv2.Rodrigues(rvec)
         angle_rad = math.atan2(R[1,0], R[0,0])
         angle_deg = math.degrees(angle_rad)
-        return angle_deg # [-180, 180]
+        return angle_deg  # [-180, 180]
 
-    # Estimate distance (z) from marker to cam
     def get_distance(self, c):
+        """Estimate distance (z) from marker to camera"""
         TL, TR, BR, BL = c
 
         # Average side length in pixels
@@ -73,9 +84,10 @@ class Estimate:
         fx = self.K[0,0]  # Focal length in pixels
         # Pinhole model: size_in_pixels = (f * real_size) / Z
         Z = (fx * self.MARKER_SIZE_M) / side_px
-        return Z * 1.39 # 1.39 determined experimentally
+        return Z * 1.39  # 1.39 determined experimentally
     
     def get_degree_in_game(self, rvec, tvec, frame, ok_pnp):
+        """Calculate weapon position and orientation from ArUco marker"""
         point_3d = np.array([[0, 0, 0]], dtype=np.float32)  # marker center
         point_2d, _ = cv2.projectPoints(point_3d, rvec, tvec, self.K, self.dist)
 
@@ -83,8 +95,8 @@ class Estimate:
         cv2.circle(frame, (int(x), int(y)), 20, (0, 0, 255), 10)
         
         # Get ratio of x pos / total width, convert to a degree by doing ratio * 180
-        artistic = 1.3 # This factor makes it so the gun doesn't actually move that much, for better artisitc value
-        r = 0.4 # Radius
+        artistic = 1.3  # This factor makes it so the gun doesn't actually move that much
+        r = 0.4  # Radius
         self.d = (x / self.WIDTH * r - r / 2) * artistic
         arc_deg = x / self.WIDTH * 180 - 90
     
@@ -165,7 +177,7 @@ class Estimate:
             # Optional: draw palm point
             cv2.circle(frame, palm_px, 5, (255,255,255), -1, cv2.LINE_AA)
 
-            # Decision of reloading (fist + above)q
+            # Decision of reloading (fist + above)
             if sum(curls) >= 4 and compact and avg_y < aruco_central_y:
                 return True
 
@@ -193,13 +205,11 @@ class Estimate:
         up_step_thresh   = 3.0   # min single-frame "up" change (y decreases)
         down_step_thresh = 3.0   # min single-frame "down" change (y increases)
         amp_min          = 6.0   # overall peak-to-trough needed
-        # You can lower these further to make it even more sensitive.
 
         # Compute first differences
         dys = [ys[i+1] - ys[i] for i in range(len(ys)-1)]  # + = down, - = up
 
         # Look for an UP step followed soon by a DOWN step
-        # e.g., dy[k] < -up_thresh and dy[m] > down_thresh with m>k
         up_idxs   = [i for i, dy in enumerate(dys) if dy < -up_step_thresh]
         down_idxs = [i for i, dy in enumerate(dys) if dy >  down_step_thresh]
 
@@ -212,8 +222,7 @@ class Estimate:
         if not m_candidates:
             return False
 
-        # Amplitude check around the up→down region (very tolerant)
-        # Use indices from the start of the detected UP to the end of the detected DOWN
+        # Amplitude check around the up→down region
         m = min(m_candidates)
         seg = ys[k:(m+2)]  # cover points affected by dy[k]..dy[m]
         if len(seg) < 2:
@@ -230,6 +239,21 @@ class Estimate:
             return False
 
         return True
+    
+    def get_weapon_transform_data(self):
+        """
+        Return all weapon transform data needed by the game.
+        This includes position offset, orientation, rotation angle, and distance.
+        """
+        return {
+            'position_offset': self.d,           # Horizontal position offset
+            'orientation_alpha': self.alpha,     # Orientation angle in radians
+            'degree': 90.0,                      # Legacy compatibility
+            'rotation_angle': self.angle,        # Left/right rotation of gun
+            'distance_to_cam': self.d_to_cam if self.d_to_cam > 0 else 0,  # Distance from camera
+            'shooting': self.shooting,           # Shooting state
+            'reloading': self.reloading          # Reloading state
+        }
 
     def get_measurements(self, frame):
         corners, ids, _ = self.detector.detectMarkers(frame)
@@ -238,23 +262,33 @@ class Estimate:
             self.aruco.drawDetectedMarkers(frame, corners, ids)
             for c in corners:
                 c = c.reshape(-1, 2).astype(np.float32)
-                # rvec is rotation vector (stores rotation of aruco relative to cam), tvec is translation vector relative to camera
+                # rvec is rotation vector, tvec is translation vector relative to camera
                 ok_pnp, rvec, tvec = cv2.solvePnP(self.objp, c, self.K, self.dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 
                 # Angles and orientation
                 self.get_degree_in_game(rvec, tvec, frame, ok_pnp)
+                
+                # Distance to cam
+                self.d_to_cam = self.get_distance(c)
+                
+                # Rotation angle (left/right gun rotation)
                 self.angle = self.get_inplane_angle(rvec)
-                xs, ys = c[:,0], c[:,1]; x1, y1, x2, y2 = map(int, [xs.min(), ys.min(), xs.max(), ys.max()])
-                tx, ty = int((x1+x2)/2), max(0, y1-6); txt = f"{self.angle:+.1f}°"
+                
+                # Label aruco
+                xs, ys = c[:,0], c[:,1]
+                x1, y1, x2, y2 = map(int, [xs.min(), ys.min(), xs.max(), ys.max()])
+                tx, ty = int((x1+x2)/2), max(0, y1-6)
+                txt = f"{self.angle:+.1f}°"
                 sz = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-                cv2.putText(frame, txt, (tx - sz[0]//2, ty + sz[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2, cv2.LINE_AA)
+                cv2.putText(frame, txt, (tx - sz[0]//2, ty + sz[1]), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2, cv2.LINE_AA)
                 
-                central_y = int((y1 + y2) / 2) 
+                central_y = int((y1 + y2) / 2)
                 
-                # Reload
+                # Track coordinates for shooting detection
                 self.track_coords.append((tx, central_y))
                 
-                # Shoot
+                # Shooting detection
                 if self.shooting:
                     self.shooting = False
                 if self.shoot_cooldown == 0:
@@ -262,13 +296,17 @@ class Estimate:
                     if self.shooting:
                         self.shoot_cooldown = 5
                 
+                # Reloading detection
                 if self.reloading:
                     self.reloading = False
                 if self.reload_cooldown == 0:
                     self.reloading = self.detect_left_fist(frame, central_y)
-                    if self.reloading: # Initiate cooldown
+                    if self.reloading:
                         self.reload_cooldown = 30
-                    
+        else:
+            # No marker detected - keep distance at 0 to signal no detection
+            self.d_to_cam = 0
+
         return frame
 
 if __name__ == "__main__":
@@ -277,23 +315,31 @@ if __name__ == "__main__":
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    
-    kernel = np.ones((5,5), np.uint8)
-    
+
     while True:
         _, frame = cap.read()
         frame = cv2.flip(frame, 1)
         frame = estimator.get_measurements(frame)
         
-        # Reload
+        # Update cooldowns
         if estimator.reload_cooldown > 0:
             estimator.reload_cooldown -= 1
-        cv2.putText(frame, f'Reload cooldown {estimator.reload_cooldown}', (10, 60), cv2.FONT_HERSHEY_COMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, f'Reload cooldown {estimator.reload_cooldown}', 
+                   (10, 60), cv2.FONT_HERSHEY_COMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
         
-        # Shoot
         if estimator.shoot_cooldown > 0:
             estimator.shoot_cooldown -= 1
-        cv2.putText(frame, f'Shooting cooldown {estimator.shoot_cooldown}', (10, 110), cv2.FONT_HERSHEY_COMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, f'Shooting cooldown {estimator.shoot_cooldown}', 
+                   (10, 110), cv2.FONT_HERSHEY_COMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+        
+        # Display weapon transform data
+        data = estimator.get_weapon_transform_data()
+        cv2.putText(frame, f"Distance: {data['distance_to_cam']:.2f}m", 
+                   (10, 160), cv2.FONT_HERSHEY_COMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"Shooting: {data['shooting']}", 
+                   (10, 210), cv2.FONT_HERSHEY_COMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"Reloading: {data['reloading']}", 
+                   (10, 260), cv2.FONT_HERSHEY_COMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
         
         cv2.imshow("Cam Feed", frame)
 
