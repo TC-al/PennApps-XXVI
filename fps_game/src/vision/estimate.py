@@ -45,7 +45,8 @@ class Estimate:
         # Initialize all tracking variables
         self.d = 0
         self.alpha = 0
-        self.d_to_cam = 0  # Distance to camera
+        self.d_to_cam = 1.5  # Initialize with default distance instead of 0
+        self.last_valid_distance = 1.5  # Store the last valid distance measurement
         self.angle = 0  # Rotation angle for left/right gun rotation
         
         # Reload detection
@@ -251,7 +252,7 @@ class Estimate:
             'orientation_alpha': self.alpha,     # Orientation angle in radians
             'degree': 90.0,                      # Legacy compatibility
             'rotation_angle': self.angle,        # Left/right rotation of gun
-            'distance_to_cam': self.d_to_cam if self.d_to_cam > 0 else 0,  # Distance from camera
+            'distance_to_cam': self.d_to_cam,    # Distance from camera (now persistent)
             'shooting': self.shooting,           # Shooting state
             'reloading': self.reloading          # Reloading state
         }
@@ -269,8 +270,12 @@ class Estimate:
                 # Angles and orientation
                 self.get_degree_in_game(rvec, tvec, frame, ok_pnp)
                 
-                # Distance to cam
-                self.d_to_cam = self.get_distance(c)
+                # Distance to cam - only update if valid
+                new_distance = self.get_distance(c)
+                if new_distance > 0:
+                    self.d_to_cam = new_distance
+                    self.last_valid_distance = new_distance
+                # If new_distance is 0 or negative, keep the current d_to_cam value
                 
                 # Rotation angle (left/right gun rotation)
                 self.angle = self.get_inplane_angle(rvec)
@@ -305,8 +310,9 @@ class Estimate:
                     if self.reloading:
                         self.reload_cooldown = 30
         else:
-            # No marker detected - keep distance at 0 to signal no detection
-            self.d_to_cam = 0
+            # No marker detected - keep the last valid distance instead of setting to 0
+            # self.d_to_cam remains at its last valid value
+            pass
 
         return frame
 

@@ -50,22 +50,14 @@ class QuaternionWeapon:
         
     def update_full_aruco_data(self, full_data):
         """Update weapon using complete ArUco detection data including rotation and distance"""
-        # Update all geometry data except distance_to_cam (handled separately below)
-        self.geometry_data['position_offset'] = full_data.get('position_offset', 0.0)
-        self.geometry_data['orientation_alpha'] = full_data.get('orientation_alpha', 0.0)
-        self.geometry_data['degree'] = full_data.get('degree', 90.0)
-        self.geometry_data['rotation_angle'] = full_data.get('rotation_angle', 0.0)
-        
-        # Only update distance if we have a valid detection (> 0)
-        new_distance = full_data.get('distance_to_cam', 0)
-        if new_distance > 0:
-            self.geometry_data['distance_to_cam'] = new_distance
+        # Update all geometry data
+        self.geometry_data.update(full_data)
         
         # Get values with defaults
-        position_offset = self.geometry_data['position_offset']
-        orientation_alpha = self.geometry_data['orientation_alpha']
-        rotation_angle = -self.geometry_data['rotation_angle']  # Invert the angle
-        distance_to_cam = self.geometry_data['distance_to_cam']
+        position_offset = full_data.get('position_offset', 0.0)
+        orientation_alpha = full_data.get('orientation_alpha', 0.0)
+        rotation_angle = -full_data.get('rotation_angle', 0.0)  # Invert the angle
+        distance_to_cam = full_data.get('distance_to_cam', self.default_distance_to_cam)
         
         # If distance is 0 (marker not visible), use default
         if distance_to_cam <= 0.01:
