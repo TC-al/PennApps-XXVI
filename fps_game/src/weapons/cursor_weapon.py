@@ -294,7 +294,7 @@ class QuaternionWeapon:
     
     def set_yaw_angle(self, yaw_degrees):
         """Manually set yaw angle (in degrees)"""
-        self.yaw_angle = math.radians(yaw_degrees)
+        self.yaw_angle = 1.2 * math.radians(yaw_degrees)
         print(f"Yaw angle set to: {yaw_degrees:.1f}°")
     
     def set_roll_angle(self, roll_degrees):

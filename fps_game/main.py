@@ -27,7 +27,7 @@ class Game:
         
         # Set up display
         self.display = (800, 600)
-        pygame.display.set_mode(self.display, DOUBLEBUF | OPENGL)
+        pygame.display.set_mode(self.display, DOUBLEBUF | OPENGL | RESIZABLE)
         pygame.display.set_caption("3D Shooting Game - Full ArUco Control")
         
         # Initialize OpenGL
